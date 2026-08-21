@@ -96,7 +96,8 @@ struct ColMetrics {
 ColMetrics column_metrics(HDC hdc) {
   static const wchar_t* kLabels[] = {L"Σ", L"▲", L"↓", L"●"};
   static const wchar_t* kValues[] = {
-      L"999.99 GB", L"100.0%", L"999.99 MB/s", L"状态", L"未登录", L"--", L"…",
+      L"999.99 GB", L"100.0%", L"+99.9%", L"999.99 MB/s", L"状态", L"未登录",
+      L"--", L"…",
   };
   ColMetrics m;
   m.pad = MulDiv(2, g_dpi, 96);

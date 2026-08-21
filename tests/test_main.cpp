@@ -158,6 +158,9 @@ int main() {
         UsageMode::Percent, quota_to_kb(120));
     expect(abs.top_label == L"Σ", "usage glyph");
     expect(abs.top_value.find(L"%") != std::wstring::npos, "percent line");
+    const uint64_t q = quota_to_kb(120);
+    expect(format_percent(q, q) == L"100.0%", "percent 100");
+    expect(format_percent(q + q / 100, q) == L"+1.0%", "percent over 100");
     expect(format_fee_yuan(499200) == L"49.92 元", "fee to yuan");
     DisplaySnapshot tip;
     tip.username = L"123456";
@@ -167,7 +170,6 @@ int main() {
     expect(hover.find(L"学号: 123456") != std::wstring::npos, "tooltip student id");
     expect(hover.find(L"姓名: 张三") != std::wstring::npos, "tooltip name");
     expect(hover.find(L"余额: 49.92 元") != std::wstring::npos, "tooltip balance");
-    const uint64_t q = quota_to_kb(120);
     expect(usage_meter_level(q * 69 / 100, q) == MeterLevel::Normal,
            "usage under 70");
     expect(usage_meter_level(q * 70 / 100, q) == MeterLevel::Warn,

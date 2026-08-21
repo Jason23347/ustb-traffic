@@ -90,7 +90,11 @@ std::wstring format_percent(uint64_t used_kb, uint64_t quota_kb) {
   }
   const double pct =
       100.0 * static_cast<double>(used_kb) / static_cast<double>(quota_kb);
-  swprintf_s(buf, L"%.1f%%", pct);
+  if (pct > 100.0) {
+    swprintf_s(buf, L"+%.1f%%", pct - 100.0);
+  } else {
+    swprintf_s(buf, L"%.1f%%", pct);
+  }
   return buf;
 }
 
