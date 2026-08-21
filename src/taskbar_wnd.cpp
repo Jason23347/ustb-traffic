@@ -126,16 +126,14 @@ void update_tooltip_rect() {
   SendMessageW(g_tip, TTM_NEWTOOLRECT, 0, reinterpret_cast<LPARAM>(&ti));
 }
 
-void convert_white_mask_to_text(BYTE* bits, int count, COLORREF fg) {
+void tint_pixels(BYTE* bits, int start, int count, COLORREF fg) {
   const int fr = GetRValue(fg);
   const int fgv = GetGValue(fg);
   const int fb = GetBValue(fg);
-  for (int i = 0; i < count; ++i) {
-    BYTE* p = bits + static_cast<size_t>(i) * 4;
+  BYTE* p = bits + static_cast<size_t>(start) * 4;
+  for (int i = 0; i < count; ++i, p += 4) {
     const int lum = (static_cast<int>(p[0]) + p[1] + p[2]) / 3;
     if (lum <= 1) {
-      // Alpha 0 is click-through on layered windows. Keep 1 so the
-      // whole block can be right-clicked.
       p[0] = p[1] = p[2] = 0;
       p[3] = 1;
       continue;
@@ -144,6 +142,18 @@ void convert_white_mask_to_text(BYTE* bits, int count, COLORREF fg) {
     p[1] = static_cast<BYTE>(fgv * lum / 255);
     p[2] = static_cast<BYTE>(fr * lum / 255);
     p[3] = static_cast<BYTE>(lum);
+  }
+}
+
+COLORREF color_for_level(MeterLevel level) {
+  switch (level) {
+    case MeterLevel::Warn:
+      return RGB(255, 208, 0);
+    case MeterLevel::Danger:
+      return RGB(255, 72, 72);
+    case MeterLevel::Normal:
+    default:
+      return RGB(255, 255, 255);
   }
 }
 
@@ -323,7 +333,17 @@ bool present() {
   draw_row(cells.bottom_label, cells.bottom_value, height / 2, height);
   GdiFlush();
 
-  convert_white_mask_to_text(static_cast<BYTE*>(bits), width * height, g_fg);
+  const COLORREF usage_fg =
+      snap.have_usage ? color_for_level(usage_meter_level(snap.used_kb, quota))
+                      : RGB(255, 255, 255);
+  const COLORREF speed_fg =
+      snap.rate_valid
+          ? color_for_level(speed_meter_level(snap.display_rate_kbps))
+          : RGB(255, 255, 255);
+  const int top_count = width * (height / 2);
+  const int total = width * height;
+  tint_pixels(static_cast<BYTE*>(bits), 0, top_count, usage_fg);
+  tint_pixels(static_cast<BYTE*>(bits), top_count, total - top_count, speed_fg);
 
   POINT pt_dst{screen_x, screen_y};
   POINT pt_src{0, 0};

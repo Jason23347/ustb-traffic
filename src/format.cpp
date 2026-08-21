@@ -136,6 +136,32 @@ TaskbarCells format_taskbar_cells(const DisplaySnapshot& snap, UsageMode mode,
   return cells;
 }
 
+MeterLevel usage_meter_level(uint64_t used_kb, uint64_t quota_kb) {
+  if (quota_kb == 0) {
+    return MeterLevel::Normal;
+  }
+  const double pct =
+      100.0 * static_cast<double>(used_kb) / static_cast<double>(quota_kb);
+  if (pct >= 90.0) {
+    return MeterLevel::Danger;
+  }
+  if (pct >= 70.0) {
+    return MeterLevel::Warn;
+  }
+  return MeterLevel::Normal;
+}
+
+MeterLevel speed_meter_level(double kbps) {
+  const double mbps = kbps / static_cast<double>(kMb);
+  if (mbps > 8.0) {
+    return MeterLevel::Danger;
+  }
+  if (mbps > 2.0) {
+    return MeterLevel::Warn;
+  }
+  return MeterLevel::Normal;
+}
+
 std::wstring format_tooltip(const DisplaySnapshot& snap, uint64_t quota_kb) {
   std::wstring s;
   auto line = [&](const wchar_t* k, const std::wstring& v) {

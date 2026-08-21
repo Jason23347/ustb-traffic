@@ -167,6 +167,16 @@ int main() {
     expect(hover.find(L"学号: 123456") != std::wstring::npos, "tooltip student id");
     expect(hover.find(L"姓名: 张三") != std::wstring::npos, "tooltip name");
     expect(hover.find(L"余额: 49.92 元") != std::wstring::npos, "tooltip balance");
+    const uint64_t q = quota_to_kb(120);
+    expect(usage_meter_level(q * 69 / 100, q) == MeterLevel::Normal,
+           "usage under 70");
+    expect(usage_meter_level(q * 70 / 100, q) == MeterLevel::Warn,
+           "usage 70 yellow");
+    expect(usage_meter_level(q * 90 / 100, q) == MeterLevel::Danger,
+           "usage 90 red");
+    expect(speed_meter_level(2.0 * kMb) == MeterLevel::Normal, "speed 2MB white");
+    expect(speed_meter_level(2.01 * kMb) == MeterLevel::Warn, "speed over 2MB");
+    expect(speed_meter_level(8.01 * kMb) == MeterLevel::Danger, "speed over 8MB");
   }
 
   if (g_failed) {

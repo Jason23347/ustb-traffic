@@ -31,4 +31,9 @@ TaskbarCells format_taskbar_cells(const DisplaySnapshot& snap, UsageMode mode,
                                   uint64_t quota_kb);
 std::wstring format_tooltip(const DisplaySnapshot& snap, uint64_t quota_kb);
 
+enum class MeterLevel { Normal, Warn, Danger };
+
+MeterLevel usage_meter_level(uint64_t used_kb, uint64_t quota_kb);
+MeterLevel speed_meter_level(double kbps);
+
 }  // namespace ustb
