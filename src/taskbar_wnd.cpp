@@ -7,6 +7,7 @@
 #include "poller.h"
 
 #include <commctrl.h>
+#include <shellapi.h>
 #include <windowsx.h>
 
 #include <algorithm>
@@ -176,9 +177,65 @@ void attach_tray_owner() {
   g_tray_owner = GetWindow(g_hwnd, GW_OWNER);
 }
 
+bool class_is_shell(HWND hwnd) {
+  wchar_t cls[64]{};
+  if (!GetClassNameW(hwnd, cls, 64)) {
+    return false;
+  }
+  return wcscmp(cls, L"Shell_TrayWnd") == 0 ||
+         wcscmp(cls, L"Shell_SecondaryTrayWnd") == 0 ||
+         wcscmp(cls, L"Progman") == 0 || wcscmp(cls, L"WorkerW") == 0;
+}
+
+bool window_covers_monitor(HWND hwnd) {
+  RECT wr{};
+  if (!GetWindowRect(hwnd, &wr)) {
+    return false;
+  }
+  MONITORINFO mi{};
+  mi.cbSize = sizeof(mi);
+  if (!GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi)) {
+    return false;
+  }
+  const RECT& m = mi.rcMonitor;
+  return wr.left <= m.left && wr.top <= m.top && wr.right >= m.right &&
+         wr.bottom >= m.bottom;
+}
+
+bool fullscreen_app_active() {
+  QUERY_USER_NOTIFICATION_STATE state = QUNS_ACCEPTS_NOTIFICATIONS;
+  if (SUCCEEDED(SHQueryUserNotificationState(&state))) {
+    if (state == QUNS_RUNNING_D3D_FULL_SCREEN || state == QUNS_BUSY ||
+        state == QUNS_PRESENTATION_MODE) {
+      return true;
+    }
+  }
+  HWND fg = GetForegroundWindow();
+  if (!fg || fg == g_hwnd || fg == g_host) {
+    return false;
+  }
+  if (class_is_shell(fg)) {
+    return false;
+  }
+  return window_covers_monitor(fg);
+}
+
+void hide_for_fullscreen() {
+  if (g_hwnd && IsWindowVisible(g_hwnd)) {
+    ShowWindow(g_hwnd, SW_HIDE);
+  }
+}
+
 bool present() {
   if (!g_hwnd || !g_font || g_pause_updates) {
     return false;
+  }
+  if (fullscreen_app_active()) {
+    hide_for_fullscreen();
+    return false;
+  }
+  if (!IsWindowVisible(g_hwnd)) {
+    ShowWindow(g_hwnd, SW_SHOWNOACTIVATE);
   }
 
   HWND tray = find_tray();
