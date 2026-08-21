@@ -1,0 +1,16 @@
+/build/
+/out/
+/cmake-build-*/
+*.user
+*.suo
+*.sdf
+*.opensdf
+.vs/
+*.obj
+*.exe
+*.pdb
+*.ilk
+*.log
+CMakeCache.txt
+CMakeFiles/
+*.VC.db
