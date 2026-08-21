@@ -13,6 +13,7 @@ struct Config {
   unsigned interval_ms = kDefaultIntervalMs;
   unsigned quota_gb = kDefaultQuotaGb;
   UsageMode usage_mode = UsageMode::Absolute;
+  TaskbarSide taskbar_side = TaskbarSide::Right;
 };
 
 std::wstring config_dir();

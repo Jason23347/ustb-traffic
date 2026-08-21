@@ -71,6 +71,10 @@ Config load_config() {
   if (mode <= 2) {
     cfg.usage_mode = static_cast<UsageMode>(mode);
   }
+
+  GetPrivateProfileStringW(L"general", L"taskbar_side", L"0", buf,
+                           static_cast<DWORD>(std::size(buf)), path.c_str());
+  cfg.taskbar_side = parse_u(buf, 0) == 1 ? TaskbarSide::Left : TaskbarSide::Right;
   return cfg;
 }
 
@@ -90,6 +94,8 @@ void save_config(const Config& cfg) {
   WritePrivateProfileStringW(L"general", L"quota_gb", num, path.c_str());
   swprintf_s(num, L"%u", static_cast<unsigned>(cfg.usage_mode));
   WritePrivateProfileStringW(L"general", L"usage_mode", num, path.c_str());
+  swprintf_s(num, L"%u", static_cast<unsigned>(cfg.taskbar_side));
+  WritePrivateProfileStringW(L"general", L"taskbar_side", num, path.c_str());
 }
 
 }  // namespace ustb

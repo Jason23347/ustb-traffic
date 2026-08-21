@@ -11,6 +11,11 @@ enum class UsageMode {
   Percent = 2,
 };
 
+enum class TaskbarSide {
+  Right = 0,
+  Left = 1,
+};
+
 enum class MonitorState {
   Init,
   LoggedIn,

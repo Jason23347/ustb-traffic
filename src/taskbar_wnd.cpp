@@ -264,17 +264,31 @@ bool present() {
   const int width = compute_width(screen);
   const int gap = MulDiv(6, g_dpi, 96);
 
-  HWND notify = find_notify(tray);
-  RECT rc_notify{};
-  int screen_x = 0;
-  const int screen_y = rc_tray.top;
-  if (valid_rect(notify, &rc_notify) && rc_notify.left != 0) {
-    screen_x = rc_notify.left - gap - width;
-  } else {
-    screen_x = rc_tray.right - MulDiv(180, g_dpi, 96) - width;
+  TaskbarSide side = TaskbarSide::Right;
+  {
+    std::lock_guard<std::mutex> lock(app().mu);
+    side = app().config.taskbar_side;
   }
-  if (screen_x < rc_tray.left + gap) {
+
+  const int screen_y = rc_tray.top;
+  int screen_x = 0;
+  if (side == TaskbarSide::Left) {
     screen_x = rc_tray.left + gap;
+  } else {
+    HWND notify = find_notify(tray);
+    RECT rc_notify{};
+    if (valid_rect(notify, &rc_notify) && rc_notify.left != 0) {
+      screen_x = rc_notify.left - gap - width;
+    } else {
+      screen_x = rc_tray.right - MulDiv(180, g_dpi, 96) - width;
+    }
+  }
+  const int min_x = rc_tray.left + gap;
+  const int max_x = rc_tray.right - gap - width;
+  if (screen_x < min_x) {
+    screen_x = min_x;
+  } else if (max_x >= min_x && screen_x > max_x) {
+    screen_x = max_x;
   }
 
   BITMAPINFO bmi{};
@@ -450,20 +464,35 @@ LRESULT CALLBACK display_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       switch (LOWORD(wp)) {
         case IDM_USAGE_ABS:
         case IDM_USAGE_OVER:
-        case IDM_USAGE_PCT: {
+        case IDM_USAGE_PCT:
+        case IDM_SIDE_RIGHT:
+        case IDM_SIDE_LEFT: {
           Config cfg;
           {
             std::lock_guard<std::mutex> lock(app().mu);
-            if (LOWORD(wp) == IDM_USAGE_ABS) {
-              app().config.usage_mode = UsageMode::Absolute;
-            } else if (LOWORD(wp) == IDM_USAGE_OVER) {
-              app().config.usage_mode = UsageMode::OverQuota;
-            } else {
-              app().config.usage_mode = UsageMode::Percent;
+            switch (LOWORD(wp)) {
+              case IDM_USAGE_ABS:
+                app().config.usage_mode = UsageMode::Absolute;
+                break;
+              case IDM_USAGE_OVER:
+                app().config.usage_mode = UsageMode::OverQuota;
+                break;
+              case IDM_USAGE_PCT:
+                app().config.usage_mode = UsageMode::Percent;
+                break;
+              case IDM_SIDE_RIGHT:
+                app().config.taskbar_side = TaskbarSide::Right;
+                break;
+              case IDM_SIDE_LEFT:
+                app().config.taskbar_side = TaskbarSide::Left;
+                break;
+              default:
+                break;
             }
             cfg = app().config;
           }
           save_config(cfg);
+          g_last_x = INT_MIN;
           present();
           return 0;
         }

@@ -211,19 +211,27 @@ HWND add_btn(HWND parent, HINSTANCE inst, int id, const wchar_t* text, int x,
 void show_context_menu(HWND hwnd, POINT screen) {
   HMENU menu = CreatePopupMenu();
   HMENU usage = CreatePopupMenu();
+  HMENU side = CreatePopupMenu();
   UsageMode mode;
+  TaskbarSide taskbar_side;
   {
     std::lock_guard<std::mutex> lock(app().mu);
     mode = app().config.usage_mode;
+    taskbar_side = app().config.taskbar_side;
   }
-  auto radio = [&](UINT id, const wchar_t* label, bool checked) {
+  auto radio = [&](HMENU dest, UINT id, const wchar_t* label, bool checked) {
     UINT f = MF_STRING | (checked ? MF_CHECKED : MF_UNCHECKED);
-    AppendMenuW(usage, f, id, label);
+    AppendMenuW(dest, f, id, label);
   };
-  radio(IDM_USAGE_ABS, L"绝对用量", mode == UsageMode::Absolute);
-  radio(IDM_USAGE_OVER, L"超出用量", mode == UsageMode::OverQuota);
-  radio(IDM_USAGE_PCT, L"百分比用量", mode == UsageMode::Percent);
+  radio(usage, IDM_USAGE_ABS, L"绝对用量", mode == UsageMode::Absolute);
+  radio(usage, IDM_USAGE_OVER, L"超出用量", mode == UsageMode::OverQuota);
+  radio(usage, IDM_USAGE_PCT, L"百分比用量", mode == UsageMode::Percent);
+  radio(side, IDM_SIDE_RIGHT, L"靠右（托盘左侧）",
+        taskbar_side == TaskbarSide::Right);
+  radio(side, IDM_SIDE_LEFT, L"靠左（任务栏最左）",
+        taskbar_side == TaskbarSide::Left);
   AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(usage), L"用量显示");
+  AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(side), L"显示位置");
   AppendMenuW(menu, MF_STRING, IDM_OPTIONS, L"选项...");
   AppendMenuW(menu, MF_STRING | (is_autostart() ? MF_CHECKED : MF_UNCHECKED),
               IDM_AUTOSTART, L"开机自启");
