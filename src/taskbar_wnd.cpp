@@ -31,6 +31,7 @@ HWND g_tray_owner = nullptr;
 HFONT g_font = nullptr;
 int g_dpi = 96;
 COLORREF g_fg = RGB(255, 255, 255);
+bool g_light_theme = false;
 bool g_pause_updates = false;
 bool g_user_exit = false;
 int g_last_x = INT_MIN;
@@ -76,7 +77,36 @@ bool system_uses_light_theme() {
 }
 
 void refresh_colors() {
-  g_fg = system_uses_light_theme() ? RGB(16, 16, 16) : RGB(255, 255, 255);
+  g_light_theme = system_uses_light_theme();
+  g_fg = g_light_theme ? RGB(16, 16, 16) : RGB(255, 255, 255);
+}
+
+COLORREF color_for_level(MeterLevel level) {
+  switch (level) {
+    case MeterLevel::Warn:
+      return g_light_theme ? RGB(184, 124, 0) : RGB(255, 208, 0);
+    case MeterLevel::Danger:
+      return g_light_theme ? RGB(196, 32, 32) : RGB(255, 72, 72);
+    case MeterLevel::Normal:
+    default:
+      return g_fg;
+  }
+}
+
+bool is_system_theme_change(UINT msg, LPARAM lp) {
+  if (msg == WM_THEMECHANGED) {
+    return true;
+  }
+  if (msg != WM_SETTINGCHANGE || lp == 0) {
+    return false;
+  }
+  return _wcsicmp(reinterpret_cast<const wchar_t*>(lp), L"ImmersiveColorSet") ==
+         0;
+}
+
+void apply_system_theme() {
+  refresh_colors();
+  present();
 }
 
 int text_width(HDC hdc, const wchar_t* text) {
@@ -143,18 +173,6 @@ void tint_pixels(BYTE* bits, int start, int count, COLORREF fg) {
     p[1] = static_cast<BYTE>(fgv * lum / 255);
     p[2] = static_cast<BYTE>(fr * lum / 255);
     p[3] = static_cast<BYTE>(lum);
-  }
-}
-
-COLORREF color_for_level(MeterLevel level) {
-  switch (level) {
-    case MeterLevel::Warn:
-      return RGB(255, 208, 0);
-    case MeterLevel::Danger:
-      return RGB(255, 72, 72);
-    case MeterLevel::Normal:
-    default:
-      return RGB(255, 255, 255);
   }
 }
 
@@ -350,11 +368,11 @@ bool present() {
 
   const COLORREF usage_fg =
       snap.have_usage ? color_for_level(usage_meter_level(snap.used_kb, quota))
-                      : RGB(255, 255, 255);
+                      : g_fg;
   const COLORREF speed_fg =
       snap.rate_valid
           ? color_for_level(speed_meter_level(snap.display_rate_kbps))
-          : RGB(255, 255, 255);
+          : g_fg;
   const int top_count = width * (height / 2);
   const int total = width * height;
   tint_pixels(static_cast<BYTE*>(bits), 0, top_count, usage_fg);
@@ -461,6 +479,13 @@ LRESULT CALLBACK display_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       show_context_menu(hwnd, pt);
       return 0;
     }
+    case WM_THEMECHANGED:
+    case WM_SETTINGCHANGE:
+      if (is_system_theme_change(msg, lp)) {
+        apply_system_theme();
+        return 0;
+      }
+      break;
     case WM_COMMAND:
       switch (LOWORD(wp)) {
         case IDM_USAGE_ABS:
@@ -587,6 +612,13 @@ LRESULT CALLBACK host_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         reembed_taskbar_window();
       }
       return 0;
+    case WM_THEMECHANGED:
+    case WM_SETTINGCHANGE:
+      if (is_system_theme_change(msg, lp)) {
+        apply_system_theme();
+        return 0;
+      }
+      break;
     case WM_DESTROY:
       KillTimer(hwnd, kEmbedTimer);
       g_host = nullptr;
