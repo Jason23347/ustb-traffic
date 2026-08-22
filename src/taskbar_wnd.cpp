@@ -255,8 +255,21 @@ void hide_for_fullscreen() {
   }
 }
 
+// Menus from any tray icon live in windows of the standard #32768 class. We
+// can't get notified about other apps' menus the way g_pause_updates covers
+// ours, so poll for one before touching the z-order.
+bool popup_menu_open() {
+  HWND menu = nullptr;
+  while ((menu = FindWindowExW(nullptr, menu, L"#32768", nullptr)) != nullptr) {
+    if (IsWindowVisible(menu)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool present() {
-  if (!g_hwnd || !g_font || g_pause_updates) {
+  if (!g_hwnd || !g_font || g_pause_updates || popup_menu_open()) {
     return false;
   }
   if (fullscreen_app_active()) {
@@ -351,16 +364,18 @@ bool present() {
   const auto cells = format_taskbar_cells(snap, mode, quota);
   const ColMetrics col = column_metrics(mem);
   const int value_x = col.pad + col.label_w + col.gap;
-  const DWORD dt = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX;
+  const DWORD dt_common = DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX;
+  const DWORD dt_label = dt_common | DT_CENTER;
+  const DWORD dt_value = dt_common | DT_LEFT;
 
   auto draw_row = [&](const std::wstring& label, const std::wstring& value,
                       int y0, int y1) {
     RECT lc{col.pad, y0, col.pad + col.label_w, y1};
     RECT vc{value_x, y0, width - col.pad, y1};
     if (!label.empty()) {
-      DrawTextW(mem, label.c_str(), -1, &lc, dt);
+      DrawTextW(mem, label.c_str(), -1, &lc, dt_label);
     }
-    DrawTextW(mem, value.c_str(), -1, &vc, dt);
+    DrawTextW(mem, value.c_str(), -1, &vc, dt_value);
   };
   draw_row(cells.top_label, cells.top_value, 0, height / 2);
   draw_row(cells.bottom_label, cells.bottom_value, height / 2, height);
@@ -391,8 +406,10 @@ bool present() {
 
   // Owned + TOPMOST keeps us above Shell_TrayWnd after other windows take
   // focus. Skip SHOWWINDOW; that used to flash the right-click menu.
+  // NOOWNERZORDER is what stops the raise from dragging Shell_TrayWnd up with
+  // us, which would put the taskbar over another icon's open menu.
   SetWindowPos(g_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-               SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
 
   if (ok && (screen_x != g_last_x || screen_y != g_last_y || width != g_last_w ||
              height != g_last_h)) {
