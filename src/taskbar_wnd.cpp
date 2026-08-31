@@ -5,6 +5,7 @@
 #include "format.h"
 #include "menu.h"
 #include "poller.h"
+#include "text_render.h"
 
 #include <commctrl.h>
 #include <shellapi.h>
@@ -28,7 +29,6 @@ HWND g_host = nullptr;
 HWND g_hwnd = nullptr;
 HWND g_tip = nullptr;
 HWND g_tray_owner = nullptr;
-HFONT g_font = nullptr;
 int g_dpi = 96;
 COLORREF g_fg = RGB(255, 255, 255);
 bool g_light_theme = false;
@@ -54,13 +54,6 @@ bool valid_rect(HWND hwnd, RECT* rc) {
     return false;
   }
   return rc->right > rc->left && rc->bottom > rc->top;
-}
-
-HFONT make_font(int dpi) {
-  return CreateFontW(-MulDiv(9, dpi, 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE,
-                     FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                     CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
-                     DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
 }
 
 bool system_uses_light_theme() {
@@ -109,10 +102,8 @@ void apply_system_theme() {
   present();
 }
 
-int text_width(HDC hdc, const wchar_t* text) {
-  SIZE sz{};
-  GetTextExtentPoint32W(hdc, text, static_cast<int>(wcslen(text)), &sz);
-  return sz.cx;
+int text_width(const wchar_t* text, bool tabular) {
+  return text_render_width(text, tabular);
 }
 
 struct ColMetrics {
@@ -123,7 +114,7 @@ struct ColMetrics {
   int total() const { return pad + label_w + gap + value_w + pad; }
 };
 
-ColMetrics column_metrics(HDC hdc) {
+ColMetrics column_metrics() {
   static const wchar_t* kLabels[] = {L"Σ", L"▲", L"↓", L"●"};
   static const wchar_t* kValues[] = {
       L"999.99 GB", L"100.0%", L"+99.9%", L"999.99 MB/s", L"状态", L"未登录",
@@ -132,18 +123,16 @@ ColMetrics column_metrics(HDC hdc) {
   ColMetrics m;
   m.pad = MulDiv(2, g_dpi, 96);
   m.gap = MulDiv(4, g_dpi, 96);
-  HGDIOBJ old = SelectObject(hdc, g_font);
   for (const wchar_t* s : kLabels) {
-    m.label_w = (std::max)(m.label_w, text_width(hdc, s));
+    m.label_w = (std::max)(m.label_w, text_width(s, false));
   }
   for (const wchar_t* s : kValues) {
-    m.value_w = (std::max)(m.value_w, text_width(hdc, s));
+    m.value_w = (std::max)(m.value_w, text_width(s, true));
   }
-  SelectObject(hdc, old);
   return m;
 }
 
-int compute_width(HDC hdc) { return column_metrics(hdc).total(); }
+int compute_width() { return column_metrics().total(); }
 
 void update_tooltip_rect() {
   if (!g_tip || !g_hwnd) {
@@ -157,22 +146,23 @@ void update_tooltip_rect() {
   SendMessageW(g_tip, TTM_NEWTOOLRECT, 0, reinterpret_cast<LPARAM>(&ti));
 }
 
-void tint_pixels(BYTE* bits, int start, int count, COLORREF fg) {
-  const int fr = GetRValue(fg);
-  const int fgv = GetGValue(fg);
-  const int fb = GetBValue(fg);
-  BYTE* p = bits + static_cast<size_t>(start) * 4;
+void ensure_hit_testable(BYTE* bits, int width, int height) {
+  const int count = width * height;
+  BYTE* p = bits;
   for (int i = 0; i < count; ++i, p += 4) {
-    const int lum = (static_cast<int>(p[0]) + p[1] + p[2]) / 3;
-    if (lum <= 1) {
-      p[0] = p[1] = p[2] = 0;
+    if (p[3] == 0) {
       p[3] = 1;
-      continue;
     }
-    p[0] = static_cast<BYTE>(fb * lum / 255);
-    p[1] = static_cast<BYTE>(fgv * lum / 255);
-    p[2] = static_cast<BYTE>(fr * lum / 255);
-    p[3] = static_cast<BYTE>(lum);
+  }
+}
+
+void update_hit_region(int width, int height) {
+  if (!g_hwnd) {
+    return;
+  }
+  HRGN rgn = CreateRectRgn(0, 0, width, height);
+  if (rgn) {
+    SetWindowRgn(g_hwnd, rgn, TRUE);
   }
 }
 
@@ -269,7 +259,7 @@ bool popup_menu_open() {
 }
 
 bool present() {
-  if (!g_hwnd || !g_font || g_pause_updates || popup_menu_open()) {
+  if (!g_hwnd || !text_render_init() || g_pause_updates || popup_menu_open()) {
     return false;
   }
   if (fullscreen_app_active()) {
@@ -293,7 +283,7 @@ bool present() {
   attach_tray_owner();
 
   HDC screen = GetDC(nullptr);
-  const int width = compute_width(screen);
+  const int width = compute_width();
   const int gap = MulDiv(6, g_dpi, 96);
 
   TaskbarSide side = TaskbarSide::Right;
@@ -345,12 +335,8 @@ bool present() {
   }
 
   HGDIOBJ old_bmp = SelectObject(mem, dib);
-  HGDIOBJ old_font = SelectObject(mem, g_font);
   std::memset(bits, 0, static_cast<size_t>(width) * static_cast<size_t>(height) *
                            4);
-
-  SetBkMode(mem, TRANSPARENT);
-  SetTextColor(mem, RGB(255, 255, 255));
 
   DisplaySnapshot snap;
   UsageMode mode;
@@ -362,25 +348,8 @@ bool present() {
     quota = quota_to_kb(app().config.quota_gb);
   }
   const auto cells = format_taskbar_cells(snap, mode, quota);
-  const ColMetrics col = column_metrics(mem);
+  const ColMetrics col = column_metrics();
   const int value_x = col.pad + col.label_w + col.gap;
-  const DWORD dt_common = DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX;
-  const DWORD dt_label = dt_common | DT_CENTER;
-  const DWORD dt_value = dt_common | DT_LEFT;
-
-  auto draw_row = [&](const std::wstring& label, const std::wstring& value,
-                      int y0, int y1) {
-    RECT lc{col.pad, y0, col.pad + col.label_w, y1};
-    RECT vc{value_x, y0, width - col.pad, y1};
-    if (!label.empty()) {
-      DrawTextW(mem, label.c_str(), -1, &lc, dt_label);
-    }
-    DrawTextW(mem, value.c_str(), -1, &vc, dt_value);
-  };
-  draw_row(cells.top_label, cells.top_value, 0, height / 2);
-  draw_row(cells.bottom_label, cells.bottom_value, height / 2, height);
-  GdiFlush();
-
   const COLORREF usage_fg =
       snap.have_usage ? color_for_level(usage_meter_level(snap.used_kb, quota))
                       : g_fg;
@@ -388,10 +357,25 @@ bool present() {
       snap.rate_valid
           ? color_for_level(speed_meter_level(snap.display_rate_kbps))
           : g_fg;
-  const int top_count = width * (height / 2);
-  const int total = width * height;
-  tint_pixels(static_cast<BYTE*>(bits), 0, top_count, usage_fg);
-  tint_pixels(static_cast<BYTE*>(bits), top_count, total - top_count, speed_fg);
+
+  const RECT bounds{0, 0, width, height};
+  if (text_render_begin(mem, bounds)) {
+    auto draw_row = [&](const std::wstring& label, const std::wstring& value,
+                        int y0, int y1, COLORREF fg) {
+      RECT lc{col.pad, y0, col.pad + col.label_w, y1};
+      RECT vc{value_x, y0, width - col.pad, y1};
+      if (!label.empty()) {
+        text_render_draw(label.c_str(), lc, fg, true, false);
+      }
+      text_render_draw(value.c_str(), vc, fg, false, true);
+    };
+    draw_row(cells.top_label, cells.top_value, 0, height / 2, usage_fg);
+    draw_row(cells.bottom_label, cells.bottom_value, height / 2, height,
+             speed_fg);
+    text_render_end();
+  }
+
+  ensure_hit_testable(static_cast<BYTE*>(bits), width, height);
 
   POINT pt_dst{screen_x, screen_y};
   POINT pt_src{0, 0};
@@ -417,10 +401,10 @@ bool present() {
     g_last_y = screen_y;
     g_last_w = width;
     g_last_h = height;
+    update_hit_region(width, height);
     update_tooltip_rect();
   }
 
-  SelectObject(mem, old_font);
   SelectObject(mem, old_bmp);
   DeleteObject(dib);
   DeleteDC(mem);
@@ -456,10 +440,8 @@ LRESULT CALLBACK display_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       if (g_dpi == 0) {
         g_dpi = 96;
       }
-      if (g_font) {
-        DeleteObject(g_font);
-      }
-      g_font = make_font(g_dpi);
+      text_render_init();
+      text_render_set_dpi(g_dpi);
       refresh_colors();
       create_tooltip(hwnd, app().instance);
       SetTimer(hwnd, kPresentTimer, 200, nullptr);
@@ -473,6 +455,8 @@ LRESULT CALLBACK display_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_ERASEBKGND:
       return 1;
+    case WM_NCHITTEST:
+      return HTCLIENT;
     case WM_TIMER:
       if (wp == kPresentTimer) {
         refresh_colors();
@@ -570,19 +554,13 @@ LRESULT CALLBACK display_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       if (g_dpi == 0) {
         g_dpi = 96;
       }
-      if (g_font) {
-        DeleteObject(g_font);
-      }
-      g_font = make_font(g_dpi);
+      text_render_set_dpi(g_dpi);
       present();
       return 0;
     }
     case WM_DESTROY:
       KillTimer(hwnd, kPresentTimer);
-      if (g_font) {
-        DeleteObject(g_font);
-        g_font = nullptr;
-      }
+      text_render_shutdown();
       g_hwnd = nullptr;
       g_tip = nullptr;
       g_tray_owner = nullptr;
@@ -693,13 +671,7 @@ bool create_display_window(HINSTANCE instance, bool wait_for_tray) {
 
 HWND taskbar_owner_hwnd() { return g_host; }
 
-int measure_taskbar_width(HDC hdc, HFONT font) {
-  HFONT old = g_font;
-  g_font = font;
-  const int w = compute_width(hdc);
-  g_font = old;
-  return w;
-}
+int measure_taskbar_width(HDC, HFONT) { return compute_width(); }
 
 bool create_taskbar_window(HINSTANCE instance) {
   WNDCLASSEXW host_wc{};

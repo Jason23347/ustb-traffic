@@ -22,6 +22,7 @@ add_executable(UstbTraffic WIN32
   src/config.cpp
   src/poller.cpp
   src/taskbar_wnd.cpp
+  src/text_render.cpp
   src/menu.cpp
   src/autostart.cpp
   src/app.rc
@@ -44,6 +45,8 @@ target_link_libraries(UstbTraffic PRIVATE
   advapi32
   comctl32
   ole32
+  d2d1
+  dwrite
 )
 if(MSVC)
   target_link_options(UstbTraffic PRIVATE /MANIFEST:NO)
