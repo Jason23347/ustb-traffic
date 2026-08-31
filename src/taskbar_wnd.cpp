@@ -116,10 +116,6 @@ struct ColMetrics {
 
 ColMetrics column_metrics() {
   static const wchar_t* kLabels[] = {L"Σ", L"▲", L"↓", L"●"};
-  static const wchar_t* kValues[] = {
-      L"999.99 GB", L"100.0%", L"+99.9%", L"999.99 MB/s", L"状态", L"未登录",
-      L"--", L"…",
-  };
   unsigned pad_px = kDefaultTaskbarPadPx;
   unsigned gap_px = kDefaultTaskbarGapPx;
   {
@@ -133,9 +129,10 @@ ColMetrics column_metrics() {
   for (const wchar_t* s : kLabels) {
     m.label_w = (std::max)(m.label_w, text_width(s, false));
   }
-  for (const wchar_t* s : kValues) {
+  each_taskbar_value_width_sample([&](const wchar_t* s) {
     m.value_w = (std::max)(m.value_w, text_width(s, true));
-  }
+  });
+  m.value_w += MulDiv(static_cast<int>(kTaskbarValueWidthSlopPx), g_dpi, 96);
   return m;
 }
 

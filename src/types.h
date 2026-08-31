@@ -65,6 +65,7 @@ constexpr float kTaskbarFontPt = 8.0f;
 constexpr unsigned kDefaultTaskbarPadPx = 2;
 constexpr unsigned kDefaultTaskbarGapPx = 8;
 constexpr unsigned kMaxTaskbarPadGapPx = 32;
+constexpr unsigned kTaskbarValueWidthSlopPx = 2;
 
 inline constexpr wchar_t kAppName[] = L"UstbTraffic";
 inline constexpr wchar_t kAppVersion[] = L"1.0.0";

@@ -36,4 +36,22 @@ enum class MeterLevel { Normal, Warn, Danger };
 MeterLevel usage_meter_level(uint64_t used_kb, uint64_t quota_kb);
 MeterLevel speed_meter_level(double kbps);
 
+template <typename Fn>
+void each_taskbar_value_width_sample(Fn&& fn) {
+  static const wchar_t* kSamples[] = {
+      L"1023.99 KB/s",
+      L"999.99 MB/s",
+      L"999.99 TB",
+      L"100.0%",
+      L"+99.9%",
+      L"未登录",
+      L"状态",
+      L"--",
+      L"…",
+  };
+  for (const wchar_t* sample : kSamples) {
+    fn(sample);
+  }
+}
+
 }  // namespace ustb

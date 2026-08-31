@@ -140,7 +140,9 @@ int text_render_width(const wchar_t* text, bool tabular) {
   if (FAILED(layout->GetMetrics(&metrics))) {
     return 0;
   }
-  return static_cast<int>(metrics.widthIncludingTrailingWhitespace + 0.5f);
+  return static_cast<int>(metrics.widthIncludingTrailingWhitespace *
+                              static_cast<float>(g_dpi) / 96.0f +
+                          0.5f);
 }
 
 bool text_render_begin(HDC hdc, const RECT& bounds) {
