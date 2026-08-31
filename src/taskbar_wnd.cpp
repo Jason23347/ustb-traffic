@@ -529,6 +529,9 @@ LRESULT CALLBACK display_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case IDM_AUTOSTART:
           set_autostart(!is_autostart());
           return 0;
+        case IDM_ABOUT:
+          show_about_dialog(g_host ? g_host : hwnd);
+          return 0;
         case IDM_EXIT:
           PostMessageW(g_host ? g_host : hwnd, WM_CLOSE, 0, 0);
           return 0;

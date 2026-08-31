@@ -4,6 +4,7 @@
 #include "autostart.h"
 #include "config.h"
 #include "taskbar_wnd.h"
+#include "types.h"
 
 #include <windows.h>
 
@@ -236,6 +237,7 @@ void show_context_menu(HWND hwnd, POINT screen) {
   AppendMenuW(menu, MF_STRING | (is_autostart() ? MF_CHECKED : MF_UNCHECKED),
               IDM_AUTOSTART, L"开机自启");
   AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+  AppendMenuW(menu, MF_STRING, IDM_ABOUT, L"关于...");
   AppendMenuW(menu, MF_STRING, IDM_EXIT, L"退出");
 
   pause_taskbar_updates(true);
@@ -343,6 +345,15 @@ void show_options_dialog(HWND parent) {
           dpx(kOptClientW) - dpx(24) - btn_w, btn_y, btn_w, btn_h, 0);
   ShowWindow(g_opt, SW_SHOW);
   SetForegroundWindow(g_opt);
+}
+
+void show_about_dialog(HWND parent) {
+  wchar_t text[512];
+  swprintf_s(text, L"%s\nv%s\n\n%s\n\n作者：%s", kAppName, kAppVersion,
+             kAppTagline, kAppAuthor);
+  wchar_t title[64];
+  swprintf_s(title, L"关于 %s", kAppName);
+  MessageBoxW(parent, text, title, MB_OK | MB_ICONINFORMATION);
 }
 
 }  // namespace ustb
