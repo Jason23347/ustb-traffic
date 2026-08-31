@@ -373,9 +373,17 @@ bool present() {
       }
       text_render_draw(value.c_str(), vc, fg, false, true);
     };
-    draw_row(cells.top_label, cells.top_value, 0, height / 2, usage_fg);
-    draw_row(cells.bottom_label, cells.bottom_value, height / 2, height,
-             speed_fg);
+    const int line_h = (std::max)(1, text_render_line_height());
+    const int row_gap = MulDiv(kTaskbarRowGapPx, g_dpi, 96);
+    const int block = line_h * 2 + row_gap;
+    int top_y = (height - block) / 2;
+    if (top_y < 0) {
+      top_y = 0;
+    }
+    const int bottom_y = top_y + line_h + row_gap;
+    draw_row(cells.top_label, cells.top_value, top_y, top_y + line_h, usage_fg);
+    draw_row(cells.bottom_label, cells.bottom_value, bottom_y,
+             bottom_y + line_h, speed_fg);
     text_render_end();
   }
 

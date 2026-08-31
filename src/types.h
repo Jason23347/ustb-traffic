@@ -61,11 +61,12 @@ constexpr int kBackoffCapMs = 30000;
 constexpr unsigned kDefaultQuotaGb = 120;
 constexpr unsigned kDefaultIntervalMs = 1000;
 constexpr unsigned kMinIntervalMs = 500;
-constexpr float kTaskbarFontPt = 8.0f;
+constexpr float kTaskbarFontPt = 6.0f;
 constexpr unsigned kDefaultTaskbarPadPx = 2;
 constexpr unsigned kDefaultTaskbarGapPx = 8;
 constexpr unsigned kMaxTaskbarPadGapPx = 32;
 constexpr unsigned kTaskbarValueWidthSlopPx = 2;
+constexpr int kTaskbarRowGapPx = 0;
 
 inline constexpr wchar_t kAppName[] = L"UstbTraffic";
 inline constexpr wchar_t kAppVersion[] = L"1.0.0";

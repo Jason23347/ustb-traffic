@@ -145,6 +145,46 @@ int text_render_width(const wchar_t* text, bool tabular) {
                           0.5f);
 }
 
+int text_render_line_height() {
+  if (!ensure_format()) {
+    return 0;
+  }
+  ComPtr<IDWriteFontCollection> collection;
+  if (FAILED(g_format->GetFontCollection(&collection)) || !collection) {
+    return static_cast<int>(font_size_dip(g_dpi) * static_cast<float>(g_dpi) /
+                                96.0f +
+                            0.5f);
+  }
+  UINT32 index = 0;
+  BOOL exists = FALSE;
+  if (FAILED(collection->FindFamilyName(kUIFont, &index, &exists)) || !exists) {
+    return static_cast<int>(font_size_dip(g_dpi) * static_cast<float>(g_dpi) /
+                                96.0f +
+                            0.5f);
+  }
+  ComPtr<IDWriteFontFamily> family;
+  if (FAILED(collection->GetFontFamily(index, &family)) || !family) {
+    return 0;
+  }
+  ComPtr<IDWriteFont> font;
+  if (FAILED(family->GetFirstMatchingFont(
+          g_format->GetFontWeight(), g_format->GetFontStretch(),
+          g_format->GetFontStyle(), &font)) ||
+      !font) {
+    return 0;
+  }
+  DWRITE_FONT_METRICS metrics{};
+  font->GetMetrics(&metrics);
+  if (metrics.designUnitsPerEm == 0) {
+    return 0;
+  }
+  const float dip =
+      font_size_dip(g_dpi) *
+      static_cast<float>(metrics.ascent + metrics.descent + metrics.lineGap) /
+      static_cast<float>(metrics.designUnitsPerEm);
+  return static_cast<int>(dip * static_cast<float>(g_dpi) / 96.0f + 0.5f);
+}
+
 bool text_render_begin(HDC hdc, const RECT& bounds) {
   if (!ensure_dc_rt() || g_drawing) {
     return false;
