@@ -65,6 +65,16 @@ Config load_config() {
                            static_cast<DWORD>(std::size(buf)), path.c_str());
   cfg.quota_gb = std::clamp(parse_u(buf, kDefaultQuotaGb), 1u, 10000u);
 
+  GetPrivateProfileStringW(L"general", L"taskbar_pad_px", L"2", buf,
+                           static_cast<DWORD>(std::size(buf)), path.c_str());
+  cfg.taskbar_pad_px = std::clamp(parse_u(buf, kDefaultTaskbarPadPx), 0u,
+                                  kMaxTaskbarPadGapPx);
+
+  GetPrivateProfileStringW(L"general", L"taskbar_gap_px", L"8", buf,
+                           static_cast<DWORD>(std::size(buf)), path.c_str());
+  cfg.taskbar_gap_px = std::clamp(parse_u(buf, kDefaultTaskbarGapPx), 0u,
+                                  kMaxTaskbarPadGapPx);
+
   GetPrivateProfileStringW(L"general", L"usage_mode", L"0", buf,
                            static_cast<DWORD>(std::size(buf)), path.c_str());
   const unsigned mode = parse_u(buf, 0);
@@ -92,6 +102,10 @@ void save_config(const Config& cfg) {
   WritePrivateProfileStringW(L"general", L"interval_ms", num, path.c_str());
   swprintf_s(num, L"%u", cfg.quota_gb);
   WritePrivateProfileStringW(L"general", L"quota_gb", num, path.c_str());
+  swprintf_s(num, L"%u", cfg.taskbar_pad_px);
+  WritePrivateProfileStringW(L"general", L"taskbar_pad_px", num, path.c_str());
+  swprintf_s(num, L"%u", cfg.taskbar_gap_px);
+  WritePrivateProfileStringW(L"general", L"taskbar_gap_px", num, path.c_str());
   swprintf_s(num, L"%u", static_cast<unsigned>(cfg.usage_mode));
   WritePrivateProfileStringW(L"general", L"usage_mode", num, path.c_str());
   swprintf_s(num, L"%u", static_cast<unsigned>(cfg.taskbar_side));

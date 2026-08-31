@@ -120,9 +120,16 @@ ColMetrics column_metrics() {
       L"999.99 GB", L"100.0%", L"+99.9%", L"999.99 MB/s", L"状态", L"未登录",
       L"--", L"…",
   };
+  unsigned pad_px = kDefaultTaskbarPadPx;
+  unsigned gap_px = kDefaultTaskbarGapPx;
+  {
+    std::lock_guard<std::mutex> lock(app().mu);
+    pad_px = app().config.taskbar_pad_px;
+    gap_px = app().config.taskbar_gap_px;
+  }
   ColMetrics m;
-  m.pad = MulDiv(2, g_dpi, 96);
-  m.gap = MulDiv(4, g_dpi, 96);
+  m.pad = MulDiv(static_cast<int>(pad_px), g_dpi, 96);
+  m.gap = MulDiv(static_cast<int>(gap_px), g_dpi, 96);
   for (const wchar_t* s : kLabels) {
     m.label_w = (std::max)(m.label_w, text_width(s, false));
   }
@@ -734,6 +741,11 @@ void pause_taskbar_updates(bool pause) {
   if (!pause) {
     present();
   }
+}
+
+void invalidate_taskbar_layout() {
+  g_last_x = INT_MIN;
+  present();
 }
 
 }  // namespace ustb
