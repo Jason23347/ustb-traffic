@@ -61,5 +61,12 @@ constexpr int kBackoffCapMs = 30000;
 constexpr unsigned kDefaultQuotaGb = 120;
 constexpr unsigned kDefaultIntervalMs = 1000;
 constexpr unsigned kMinIntervalMs = 500;
+constexpr float kTaskbarFontPt = 8.0f;
+
+inline constexpr wchar_t kAppName[] = L"UstbTraffic";
+inline constexpr wchar_t kAppVersion[] = L"1.0.0";
+inline constexpr wchar_t kAppTagline[] =
+    L"北京科技大学校园网流量任务栏监视器";
+inline constexpr wchar_t kAppAuthor[] = L"我和你";
 
 }  // namespace ustb

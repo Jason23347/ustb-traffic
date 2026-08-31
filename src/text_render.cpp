@@ -1,5 +1,7 @@
 #include "text_render.h"
 
+#include "types.h"
+
 #include <d2d1.h>
 #include <dwrite.h>
 #include <wrl/client.h>
@@ -18,7 +20,7 @@ bool g_drawing = false;
 constexpr wchar_t kUIFont[] = L"Segoe UI";
 
 float font_size_dip(int dpi) {
-  return 8.0f * static_cast<float>(dpi) / 72.0f;
+  return kTaskbarFontPt * static_cast<float>(dpi) / 72.0f;
 }
 
 D2D1_RECT_F to_dip(const RECT& rc) {
