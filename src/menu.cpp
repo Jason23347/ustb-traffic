@@ -107,7 +107,7 @@ LRESULT CALLBACK options_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
               wcstoul(interval_s.c_str(), nullptr, 10));
           unsigned quota =
               static_cast<unsigned>(wcstoul(quota_s.c_str(), nullptr, 10));
-          interval = std::clamp(interval, 500u, 60000u);
+          interval = std::clamp(interval, kMinIntervalMs, 60000u);
           quota = std::clamp(quota, 1u, 10000u);
           Config cfg;
           {

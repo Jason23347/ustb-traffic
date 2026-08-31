@@ -59,7 +59,7 @@ Config load_config() {
   GetPrivateProfileStringW(L"general", L"interval_ms", L"1000", buf,
                            static_cast<DWORD>(std::size(buf)), path.c_str());
   cfg.interval_ms =
-      std::clamp(parse_u(buf, kDefaultIntervalMs), 500u, 60000u);
+      std::clamp(parse_u(buf, kDefaultIntervalMs), kMinIntervalMs, 60000u);
 
   GetPrivateProfileStringW(L"general", L"quota_gb", L"120", buf,
                            static_cast<DWORD>(std::size(buf)), path.c_str());

@@ -145,6 +145,8 @@ bool http_get(const Config& cfg, std::string& body, std::wstring& err) {
 
 void poller_loop() {
   while (app().running.load()) {
+    const double loop_start = now_sec();
+
     Config cfg;
     {
       std::lock_guard<std::mutex> lock(app().mu);
@@ -177,9 +179,14 @@ void poller_loop() {
       InvalidateRect(app().hwnd, nullptr, FALSE);
     }
 
-    int wait_ms = static_cast<int>(cfg.interval_ms);
+    int target_ms = static_cast<int>(cfg.interval_ms);
     if (snap.fail_count > 0) {
-      wait_ms = backoff_ms(snap.fail_count, cfg.interval_ms);
+      target_ms = backoff_ms(snap.fail_count, cfg.interval_ms);
+    }
+    int wait_ms =
+        target_ms - static_cast<int>((now_sec() - loop_start) * 1000.0);
+    if (wait_ms < 0) {
+      wait_ms = 0;
     }
     const DWORD wr = WaitForSingleObject(g_stop, static_cast<DWORD>(wait_ms));
     if (wr == WAIT_OBJECT_0) {
