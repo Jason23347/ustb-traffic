@@ -316,6 +316,44 @@ bool text_render_begin(HDC hdc, const RECT& bounds) {
   return true;
 }
 
+void text_render_fill_rounded_rect(const RECT& rc, float radius_px, COLORREF rgb,
+                                   float alpha) {
+  if (!g_drawing || alpha <= 0.0f) {
+    return;
+  }
+  const D2D1_RECT_F dip = to_dip(rc);
+  const float radius = radius_px * 96.0f / static_cast<float>(g_dpi);
+  ComPtr<ID2D1SolidColorBrush> brush;
+  if (FAILED(g_dc_rt->CreateSolidColorBrush(
+          D2D1::ColorF(GetRValue(rgb) / 255.0f, GetGValue(rgb) / 255.0f,
+                       GetBValue(rgb) / 255.0f, alpha),
+          &brush))) {
+    return;
+  }
+  g_dc_rt->FillRoundedRectangle(
+      D2D1::RoundedRect(dip, radius, radius), brush.Get());
+}
+
+void text_render_draw_rounded_rect(const RECT& rc, float radius_px, COLORREF rgb,
+                                   float alpha, float stroke_px) {
+  if (!g_drawing || alpha <= 0.0f || stroke_px <= 0.0f) {
+    return;
+  }
+  const D2D1_RECT_F dip = to_dip(rc);
+  const float scale = 96.0f / static_cast<float>(g_dpi);
+  const float radius = radius_px * scale;
+  const float stroke = stroke_px * scale;
+  ComPtr<ID2D1SolidColorBrush> brush;
+  if (FAILED(g_dc_rt->CreateSolidColorBrush(
+          D2D1::ColorF(GetRValue(rgb) / 255.0f, GetGValue(rgb) / 255.0f,
+                       GetBValue(rgb) / 255.0f, alpha),
+          &brush))) {
+    return;
+  }
+  g_dc_rt->DrawRoundedRectangle(D2D1::RoundedRect(dip, radius, radius),
+                                brush.Get(), stroke);
+}
+
 void text_render_draw(const wchar_t* text, const RECT& rc, COLORREF fg,
                       bool center, bool tabular) {
   if (!g_drawing || !text || text[0] == L'\0') {

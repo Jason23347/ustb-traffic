@@ -13,6 +13,10 @@ void text_render_reload_system_font();
 int text_render_width(const wchar_t* text, bool tabular = false);
 int text_render_line_height();
 bool text_render_begin(HDC hdc, const RECT& bounds);
+void text_render_fill_rounded_rect(const RECT& rc, float radius_px, COLORREF rgb,
+                                   float alpha);
+void text_render_draw_rounded_rect(const RECT& rc, float radius_px, COLORREF rgb,
+                                   float alpha, float stroke_px);
 void text_render_draw(const wchar_t* text, const RECT& rc, COLORREF fg, bool center,
                       bool tabular = false);
 bool text_render_end();

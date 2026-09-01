@@ -16,24 +16,30 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace ustb {
 namespace {
 
 constexpr wchar_t kHostClass[] = L"UstbTrafficHost";
 constexpr wchar_t kWndClass[] = L"UstbTrafficTaskbar";
+constexpr wchar_t kFlyoutClass[] = L"UstbTrafficFlyout";
 constexpr UINT kPresentTimer = 1;
 constexpr UINT kEmbedTimer = 2;
+constexpr UINT kFlyoutTimer = 3;
 
 HWND g_host = nullptr;
 HWND g_hwnd = nullptr;
-HWND g_tip = nullptr;
+HWND g_flyout = nullptr;
 HWND g_tray_owner = nullptr;
 int g_dpi = 96;
 COLORREF g_fg = RGB(255, 255, 255);
 bool g_light_theme = false;
 bool g_pause_updates = false;
 bool g_user_exit = false;
+bool g_hovered = false;
+bool g_tracking_mouse = false;
+bool g_flyout_pending = false;
 int g_last_x = INT_MIN;
 int g_last_y = INT_MIN;
 int g_last_w = 0;
@@ -42,6 +48,25 @@ int g_last_h = 0;
 bool create_display_window(HINSTANCE instance, bool wait_for_tray);
 void attach_tray_owner();
 bool present();
+bool popup_menu_open();
+void hide_flyout();
+void update_flyout();
+void cancel_flyout_timer();
+void schedule_flyout();
+void set_hovered(bool hovered);
+
+UINT flyout_delay_ms() {
+  UINT ms = 400;
+  if (!SystemParametersInfoW(SPI_GETMOUSEHOVERTIME, 0, &ms, 0) || ms == 0) {
+    ms = 400;
+  }
+  if (ms < 200) {
+    ms = 200;
+  } else if (ms > 2000) {
+    ms = 2000;
+  }
+  return ms;
+}
 
 HWND find_tray() { return FindWindowW(L"Shell_TrayWnd", nullptr); }
 
@@ -162,16 +187,218 @@ ColMetrics column_metrics() {
 
 int compute_width() { return column_metrics().total(); }
 
-void update_tooltip_rect() {
-  if (!g_tip || !g_hwnd) {
+std::vector<std::wstring> split_lines(const std::wstring& text) {
+  std::vector<std::wstring> lines;
+  size_t start = 0;
+  while (start <= text.size()) {
+    const size_t pos = text.find(L'\n', start);
+    if (pos == std::wstring::npos) {
+      lines.push_back(text.substr(start));
+      break;
+    }
+    lines.push_back(text.substr(start, pos - start));
+    start = pos + 1;
+  }
+  if (lines.empty()) {
+    lines.emplace_back();
+  }
+  return lines;
+}
+
+void hide_flyout() {
+  if (g_flyout && IsWindowVisible(g_flyout)) {
+    ShowWindow(g_flyout, SW_HIDE);
+  }
+}
+
+bool paint_flyout(HWND hwnd) {
+  if (!hwnd || !text_render_init()) {
+    return false;
+  }
+  const std::wstring tip =
+      format_tooltip(app().copy_snap(), app().quota_kb());
+  const auto lines = split_lines(tip);
+  const int pad = MulDiv(14, g_dpi, 96);
+  const int line_h = (std::max)(1, text_render_line_height());
+  const int line_gap = MulDiv(2, g_dpi, 96);
+  int content_w = 0;
+  for (const auto& line : lines) {
+    content_w = (std::max)(content_w, text_render_width(line.c_str(), false));
+  }
+  const int width = content_w + pad * 2;
+  const int height =
+      pad * 2 + static_cast<int>(lines.size()) * line_h +
+      (std::max)(0, static_cast<int>(lines.size()) - 1) * line_gap;
+  if (width < 8 || height < 8) {
+    return false;
+  }
+
+  HDC screen = GetDC(nullptr);
+  BITMAPINFO bmi{};
+  bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+  bmi.bmiHeader.biWidth = width;
+  bmi.bmiHeader.biHeight = -height;
+  bmi.bmiHeader.biPlanes = 1;
+  bmi.bmiHeader.biBitCount = 32;
+  bmi.bmiHeader.biCompression = BI_RGB;
+  void* bits = nullptr;
+  HDC mem = CreateCompatibleDC(screen);
+  HBITMAP dib =
+      CreateDIBSection(mem, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
+  if (!dib || !bits) {
+    if (dib) {
+      DeleteObject(dib);
+    }
+    DeleteDC(mem);
+    ReleaseDC(nullptr, screen);
+    return false;
+  }
+  HGDIOBJ old_bmp = SelectObject(mem, dib);
+  std::memset(bits, 0, static_cast<size_t>(width) * static_cast<size_t>(height) *
+                           4);
+
+  const RECT bounds{0, 0, width, height};
+  const float radius = static_cast<float>(MulDiv(8, g_dpi, 96));
+  const COLORREF bg =
+      g_light_theme ? RGB(252, 252, 252) : RGB(32, 32, 32);
+  const COLORREF border =
+      g_light_theme ? RGB(0, 0, 0) : RGB(255, 255, 255);
+  const COLORREF fg = g_light_theme ? RGB(26, 26, 26) : RGB(255, 255, 255);
+  if (text_render_begin(mem, bounds)) {
+    // Fully opaque like the Win11 clock tip (not acrylic/translucent).
+    text_render_fill_rounded_rect(bounds, radius, bg, 1.0f);
+    text_render_draw_rounded_rect(bounds, radius, border, 0.10f,
+                                  static_cast<float>(MulDiv(1, g_dpi, 96)));
+    int y = pad;
+    for (const auto& line : lines) {
+      RECT rc{pad, y, width - pad, y + line_h};
+      text_render_draw(line.c_str(), rc, fg, false, false);
+      y += line_h + line_gap;
+    }
+    text_render_end();
+  }
+
+  RECT anchor{};
+  if (!g_hwnd || !GetWindowRect(g_hwnd, &anchor)) {
+    SelectObject(mem, old_bmp);
+    DeleteObject(dib);
+    DeleteDC(mem);
+    ReleaseDC(nullptr, screen);
+    return false;
+  }
+  const int gap = MulDiv(8, g_dpi, 96);
+  int screen_x = anchor.left + (anchor.right - anchor.left - width) / 2;
+  int screen_y = anchor.top - gap - height;
+  MONITORINFO mi{};
+  mi.cbSize = sizeof(mi);
+  if (GetMonitorInfoW(MonitorFromWindow(g_hwnd, MONITOR_DEFAULTTONEAREST),
+                      &mi)) {
+    const int margin = MulDiv(8, g_dpi, 96);
+    if (screen_x < mi.rcWork.left + margin) {
+      screen_x = mi.rcWork.left + margin;
+    }
+    if (screen_x + width > mi.rcWork.right - margin) {
+      screen_x = mi.rcWork.right - margin - width;
+    }
+    if (screen_y < mi.rcWork.top + margin) {
+      screen_y = anchor.bottom + gap;
+    }
+  }
+
+  POINT pt_dst{screen_x, screen_y};
+  POINT pt_src{0, 0};
+  SIZE size{width, height};
+  BLENDFUNCTION blend{};
+  blend.BlendOp = AC_SRC_OVER;
+  blend.SourceConstantAlpha = 255;
+  blend.AlphaFormat = AC_SRC_ALPHA;
+  const BOOL ok =
+      UpdateLayeredWindow(hwnd, screen, &pt_dst, &size, mem, &pt_src, 0,
+                          &blend, ULW_ALPHA);
+  SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+
+  SelectObject(mem, old_bmp);
+  DeleteObject(dib);
+  DeleteDC(mem);
+  ReleaseDC(nullptr, screen);
+  return ok != FALSE;
+}
+
+LRESULT CALLBACK flyout_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+  switch (msg) {
+    case WM_NCHITTEST:
+      return HTTRANSPARENT;
+    case WM_MOUSEACTIVATE:
+      return MA_NOACTIVATE;
+    default:
+      break;
+  }
+  return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+void ensure_flyout(HINSTANCE instance) {
+  if (g_flyout && IsWindow(g_flyout)) {
     return;
   }
-  TOOLINFOW ti{};
-  ti.cbSize = sizeof(ti);
-  ti.hwnd = g_hwnd;
-  ti.uId = 1;
-  GetClientRect(g_hwnd, &ti.rect);
-  SendMessageW(g_tip, TTM_NEWTOOLRECT, 0, reinterpret_cast<LPARAM>(&ti));
+  WNDCLASSEXW wc{};
+  wc.cbSize = sizeof(wc);
+  wc.lpfnWndProc = flyout_proc;
+  wc.hInstance = instance;
+  wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+  wc.lpszClassName = kFlyoutClass;
+  RegisterClassExW(&wc);
+  g_flyout = CreateWindowExW(
+      WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOPMOST,
+      kFlyoutClass, L"", WS_POPUP, 0, 0, 0, 0, g_hwnd, nullptr, instance,
+      nullptr);
+}
+
+void update_flyout() {
+  if (!g_hovered || g_flyout_pending || !g_hwnd || g_pause_updates ||
+      popup_menu_open()) {
+    hide_flyout();
+    return;
+  }
+  ensure_flyout(app().instance);
+  if (!g_flyout) {
+    return;
+  }
+  if (paint_flyout(g_flyout)) {
+    ShowWindow(g_flyout, SW_SHOWNOACTIVATE);
+  }
+}
+
+void cancel_flyout_timer() {
+  g_flyout_pending = false;
+  if (g_hwnd) {
+    KillTimer(g_hwnd, kFlyoutTimer);
+  }
+}
+
+void schedule_flyout() {
+  if (!g_hwnd) {
+    return;
+  }
+  cancel_flyout_timer();
+  g_flyout_pending = true;
+  hide_flyout();
+  SetTimer(g_hwnd, kFlyoutTimer, flyout_delay_ms(), nullptr);
+}
+
+void set_hovered(bool hovered) {
+  if (g_hovered == hovered) {
+    return;
+  }
+  g_hovered = hovered;
+  if (!hovered) {
+    cancel_flyout_timer();
+    hide_flyout();
+  }
+  present();
+  if (hovered) {
+    schedule_flyout();
+  }
 }
 
 void ensure_hit_testable(BYTE* bits, int width, int height) {
@@ -271,6 +498,10 @@ void hide_for_fullscreen() {
   if (g_hwnd && IsWindowVisible(g_hwnd)) {
     ShowWindow(g_hwnd, SW_HIDE);
   }
+  cancel_flyout_timer();
+  hide_flyout();
+  g_hovered = false;
+  g_tracking_mouse = false;
 }
 
 // Menus from any tray icon live in windows of the standard #32768 class. We
@@ -388,6 +619,20 @@ bool present() {
 
   const RECT bounds{0, 0, width, height};
   if (text_render_begin(mem, bounds)) {
+    if (g_hovered) {
+      // Match Win11 SystemTray OmniButton PointerOver:
+      // OmniButtonBackgroundPointerOver -> ShellTaskbarItemFillColorSecondary
+      // Light: #80FFFFFF, Dark: #0FFFFFFF (TaskbarResources.xbf)
+      // CornerRadius: ControlLargeCornerRadius = 4
+      const int inset_y = MulDiv(4, g_dpi, 96);
+      RECT bg{0, inset_y, width, height - inset_y};
+      if (bg.right > bg.left && bg.bottom > bg.top) {
+        const float radius = static_cast<float>(MulDiv(4, g_dpi, 96));
+        const COLORREF fill = RGB(255, 255, 255);
+        const float alpha = g_light_theme ? (0x80 / 255.0f) : (0x0F / 255.0f);
+        text_render_fill_rounded_rect(bg, radius, fill, alpha);
+      }
+    }
     auto draw_row = [&](const std::wstring& label, const std::wstring& value,
                         int y0, int y1, COLORREF fg) {
       RECT lc{col.pad, y0, col.pad + col.label_w, y1};
@@ -438,7 +683,10 @@ bool present() {
     g_last_w = width;
     g_last_h = height;
     update_hit_region(width, height);
-    update_tooltip_rect();
+  }
+  if (ok && g_hovered && !g_flyout_pending && g_flyout &&
+      IsWindowVisible(g_flyout)) {
+    update_flyout();
   }
 
   SelectObject(mem, old_bmp);
@@ -446,26 +694,6 @@ bool present() {
   DeleteDC(mem);
   ReleaseDC(nullptr, screen);
   return ok != FALSE;
-}
-
-void create_tooltip(HWND hwnd, HINSTANCE instance) {
-  g_tip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
-                          WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX, 0, 0, 0, 0,
-                          hwnd, nullptr, instance, nullptr);
-  if (!g_tip) {
-    return;
-  }
-  SetWindowPos(g_tip, HWND_TOPMOST, 0, 0, 0, 0,
-               SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-  TOOLINFOW ti{};
-  ti.cbSize = sizeof(ti);
-  ti.hwnd = hwnd;
-  ti.uId = 1;
-  ti.uFlags = TTF_SUBCLASS | TTF_TRANSPARENT;
-  GetClientRect(hwnd, &ti.rect);
-  ti.lpszText = LPSTR_TEXTCALLBACK;
-  SendMessageW(g_tip, TTM_ADDTOOL, 0, reinterpret_cast<LPARAM>(&ti));
-  SendMessageW(g_tip, TTM_SETMAXTIPWIDTH, 0, 360);
 }
 
 LRESULT CALLBACK display_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -479,7 +707,6 @@ LRESULT CALLBACK display_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       text_render_init();
       text_render_set_dpi(g_dpi);
       refresh_colors();
-      create_tooltip(hwnd, app().instance);
       SetTimer(hwnd, kPresentTimer, 200, nullptr);
       return 0;
     }
@@ -493,19 +720,43 @@ LRESULT CALLBACK display_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       return 1;
     case WM_NCHITTEST:
       return HTCLIENT;
+    case WM_MOUSEMOVE:
+      if (!g_tracking_mouse) {
+        TRACKMOUSEEVENT tme{};
+        tme.cbSize = sizeof(tme);
+        tme.dwFlags = TME_LEAVE;
+        tme.hwndTrack = hwnd;
+        if (TrackMouseEvent(&tme)) {
+          g_tracking_mouse = true;
+        }
+      }
+      set_hovered(true);
+      return 0;
+    case WM_MOUSELEAVE:
+      g_tracking_mouse = false;
+      set_hovered(false);
+      return 0;
     case WM_TIMER:
       if (wp == kPresentTimer) {
         refresh_colors();
         present();
+      } else if (wp == kFlyoutTimer) {
+        KillTimer(hwnd, kFlyoutTimer);
+        g_flyout_pending = false;
+        if (g_hovered) {
+          update_flyout();
+        }
       }
       return 0;
     case WM_RBUTTONUP: {
+      set_hovered(false);
       POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
       ClientToScreen(hwnd, &pt);
       show_context_menu(hwnd, pt);
       return 0;
     }
     case WM_CONTEXTMENU: {
+      set_hovered(false);
       POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
       if (pt.x == -1 && pt.y == -1) {
         RECT rc{};
@@ -579,19 +830,6 @@ LRESULT CALLBACK display_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
           break;
       }
       break;
-    case WM_NOTIFY: {
-      auto* hdr = reinterpret_cast<NMHDR*>(lp);
-      if (hdr && hdr->code == TTN_GETDISPINFO) {
-        auto* info = reinterpret_cast<NMTTDISPINFOW*>(lp);
-        static wchar_t tip[1024];
-        const std::wstring text =
-            format_tooltip(app().copy_snap(), app().quota_kb());
-        wcsncpy_s(tip, text.c_str(), _TRUNCATE);
-        info->lpszText = tip;
-        return 0;
-      }
-      break;
-    }
     case WM_DPICHANGED: {
       g_dpi = HIWORD(wp);
       if (g_dpi == 0) {
@@ -603,9 +841,16 @@ LRESULT CALLBACK display_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_DESTROY:
       KillTimer(hwnd, kPresentTimer);
+      cancel_flyout_timer();
+      hide_flyout();
+      if (g_flyout) {
+        DestroyWindow(g_flyout);
+        g_flyout = nullptr;
+      }
       text_render_shutdown();
       g_hwnd = nullptr;
-      g_tip = nullptr;
+      g_hovered = false;
+      g_tracking_mouse = false;
       g_tray_owner = nullptr;
       g_last_x = INT_MIN;
       app().hwnd = nullptr;

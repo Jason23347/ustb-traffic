@@ -118,7 +118,7 @@ LRESULT CALLBACK options_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
           unsigned gap = static_cast<unsigned>(wcstoul(gap_s.c_str(), nullptr, 10));
           interval = std::clamp(interval, kMinIntervalMs, 60000u);
           quota = std::clamp(quota, 1u, 10000u);
-          pad = std::clamp(pad, 0u, kMaxTaskbarPadGapPx);
+          pad = std::clamp(pad, kMinTaskbarPadPx, kMaxTaskbarPadGapPx);
           gap = std::clamp(gap, 0u, kMaxTaskbarPadGapPx);
           Config cfg;
           {

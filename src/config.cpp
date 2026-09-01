@@ -65,10 +65,10 @@ Config load_config() {
                            static_cast<DWORD>(std::size(buf)), path.c_str());
   cfg.quota_gb = std::clamp(parse_u(buf, kDefaultQuotaGb), 1u, 10000u);
 
-  GetPrivateProfileStringW(L"general", L"taskbar_pad_px", L"2", buf,
+  GetPrivateProfileStringW(L"general", L"taskbar_pad_px", L"8", buf,
                            static_cast<DWORD>(std::size(buf)), path.c_str());
-  cfg.taskbar_pad_px = std::clamp(parse_u(buf, kDefaultTaskbarPadPx), 0u,
-                                  kMaxTaskbarPadGapPx);
+  cfg.taskbar_pad_px = std::clamp(parse_u(buf, kDefaultTaskbarPadPx),
+                                  kMinTaskbarPadPx, kMaxTaskbarPadGapPx);
 
   GetPrivateProfileStringW(L"general", L"taskbar_gap_px", L"8", buf,
                            static_cast<DWORD>(std::size(buf)), path.c_str());
