@@ -97,8 +97,32 @@ bool is_system_theme_change(UINT msg, LPARAM lp) {
          0;
 }
 
+// Font metrics / shell chrome changes (accessibility text size, etc.).
+bool is_shell_font_change(UINT msg, LPARAM lp) {
+  if (msg == WM_THEMECHANGED) {
+    return true;
+  }
+  if (msg != WM_SETTINGCHANGE) {
+    return false;
+  }
+  if (lp == 0) {
+    return true;
+  }
+  const auto* name = reinterpret_cast<const wchar_t*>(lp);
+  return _wcsicmp(name, L"ImmersiveColorSet") == 0 ||
+         _wcsicmp(name, L"WindowsThemeElement") == 0;
+}
+
 void apply_system_theme() {
   refresh_colors();
+  text_render_reload_system_font();
+  g_last_x = INT_MIN;
+  present();
+}
+
+void apply_shell_font() {
+  text_render_reload_system_font();
+  g_last_x = INT_MIN;
   present();
 }
 
@@ -498,6 +522,10 @@ LRESULT CALLBACK display_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         apply_system_theme();
         return 0;
       }
+      if (is_shell_font_change(msg, lp)) {
+        apply_shell_font();
+        return 0;
+      }
       break;
     case WM_COMMAND:
       switch (LOWORD(wp)) {
@@ -626,6 +654,10 @@ LRESULT CALLBACK host_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_SETTINGCHANGE:
       if (is_system_theme_change(msg, lp)) {
         apply_system_theme();
+        return 0;
+      }
+      if (is_shell_font_change(msg, lp)) {
+        apply_shell_font();
         return 0;
       }
       break;

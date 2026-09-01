@@ -5,6 +5,9 @@
 #include <d2d1.h>
 #include <dwrite.h>
 #include <wrl/client.h>
+
+#include <cwchar>
+
 namespace ustb {
 namespace {
 
@@ -17,11 +20,10 @@ ComPtr<ID2D1DCRenderTarget> g_dc_rt;
 int g_dpi = 96;
 bool g_drawing = false;
 
-constexpr wchar_t kUIFont[] = L"Segoe UI";
-
-float font_size_dip(int dpi) {
-  return kTaskbarFontPt * static_cast<float>(dpi) / 72.0f;
-}
+wchar_t g_face[LF_FACESIZE] = L"Segoe UI";
+float g_size_dip = kFallbackTaskbarFontDip;
+DWRITE_FONT_WEIGHT g_weight = DWRITE_FONT_WEIGHT_NORMAL;
+DWRITE_FONT_STYLE g_style = DWRITE_FONT_STYLE_NORMAL;
 
 D2D1_RECT_F to_dip(const RECT& rc) {
   const float scale = 96.0f / static_cast<float>(g_dpi);
@@ -31,6 +33,82 @@ D2D1_RECT_F to_dip(const RECT& rc) {
                      static_cast<float>(rc.bottom) * scale);
 }
 
+// Prefer the same Latin UI face as the Win11 tray clock. Shell status font on
+// Chinese Windows is often Microsoft YaHei UI, which paints noticeably larger
+// than Segoe UI Variable at the same nominal size.
+bool pick_clock_face(wchar_t face[LF_FACESIZE]) {
+  static const wchar_t* kCandidates[] = {
+      L"Segoe UI Variable Text",
+      L"Segoe UI Variable",
+      L"Segoe UI",
+  };
+  if (!g_dwrite) {
+    wcsncpy_s(face, LF_FACESIZE, L"Segoe UI", _TRUNCATE);
+    return true;
+  }
+  ComPtr<IDWriteFontCollection> collection;
+  if (FAILED(g_dwrite->GetSystemFontCollection(&collection)) || !collection) {
+    wcsncpy_s(face, LF_FACESIZE, L"Segoe UI", _TRUNCATE);
+    return true;
+  }
+  for (const wchar_t* name : kCandidates) {
+    UINT32 index = 0;
+    BOOL exists = FALSE;
+    if (SUCCEEDED(collection->FindFamilyName(name, &index, &exists)) &&
+        exists) {
+      wcsncpy_s(face, LF_FACESIZE, name, _TRUNCATE);
+      return true;
+    }
+  }
+  wcsncpy_s(face, LF_FACESIZE, L"Segoe UI", _TRUNCATE);
+  return true;
+}
+
+// SPI_GETNONCLIENTMETRICS returns LOGFONT at 96 DPI (DIP) units. That maps
+// directly to DirectWrite's fontSize, which is also in DIPs. Using
+// SystemParametersInfoForDpi is avoided — it has known system-wide font bugs.
+// Size tracks the shell font (accessibility text scaling) but is scaled down to
+// match the tray clock/date, which is smaller than lfStatusFont.
+bool read_shell_font(wchar_t face[LF_FACESIZE], float* size_dip,
+                     DWRITE_FONT_WEIGHT* weight, DWRITE_FONT_STYLE* style) {
+  NONCLIENTMETRICSW ncm{};
+  ncm.cbSize = sizeof(ncm);
+  if (!SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0)) {
+    return false;
+  }
+  const LOGFONTW& lf = ncm.lfStatusFont;
+  int px = lf.lfHeight;
+  if (px < 0) {
+    px = -px;
+  }
+  if (px <= 0) {
+    px = 12;
+  }
+  *size_dip = static_cast<float>(px) * kShellToClockFontScale;
+  if (*size_dip < 8.0f) {
+    *size_dip = 8.0f;
+  }
+  pick_clock_face(face);
+  *weight = DWRITE_FONT_WEIGHT_NORMAL;
+  *style = DWRITE_FONT_STYLE_NORMAL;
+  (void)lf;
+  return true;
+}
+
+void refresh_shell_font_params() {
+  wchar_t face[LF_FACESIZE]{};
+  float size = kFallbackTaskbarFontDip;
+  DWRITE_FONT_WEIGHT weight = DWRITE_FONT_WEIGHT_NORMAL;
+  DWRITE_FONT_STYLE style = DWRITE_FONT_STYLE_NORMAL;
+  if (!read_shell_font(face, &size, &weight, &style)) {
+    wcsncpy_s(face, L"Segoe UI", _TRUNCATE);
+  }
+  wcsncpy_s(g_face, face, _TRUNCATE);
+  g_size_dip = size;
+  g_weight = weight;
+  g_style = style;
+}
+
 bool ensure_format() {
   if (!g_dwrite) {
     return false;
@@ -38,11 +116,21 @@ bool ensure_format() {
   if (g_format) {
     return true;
   }
+  wchar_t locale[LOCALE_NAME_MAX_LENGTH]{};
+  if (GetUserDefaultLocaleName(locale, LOCALE_NAME_MAX_LENGTH) == 0) {
+    wcscpy_s(locale, L"en-us");
+  }
   const HRESULT hr = g_dwrite->CreateTextFormat(
-      kUIFont, nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-      DWRITE_FONT_STRETCH_NORMAL, font_size_dip(g_dpi), L"en-us", &g_format);
+      g_face, nullptr, g_weight, g_style, DWRITE_FONT_STRETCH_NORMAL,
+      g_size_dip, locale, &g_format);
   if (FAILED(hr)) {
-    return false;
+    // Face missing (rare) — fall back to Segoe UI at the same size.
+    const HRESULT hr2 = g_dwrite->CreateTextFormat(
+        L"Segoe UI", nullptr, g_weight, g_style, DWRITE_FONT_STRETCH_NORMAL,
+        g_size_dip, locale, &g_format);
+    if (FAILED(hr2)) {
+      return false;
+    }
   }
   g_format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
   return true;
@@ -102,6 +190,7 @@ bool text_render_init() {
     text_render_shutdown();
     return false;
   }
+  refresh_shell_font_params();
   return ensure_format() && ensure_dc_rt();
 }
 
@@ -112,20 +201,44 @@ void text_render_shutdown() {
   g_dwrite.Reset();
   g_d2d.Reset();
   g_dpi = 96;
+  g_size_dip = kFallbackTaskbarFontDip;
+  g_weight = DWRITE_FONT_WEIGHT_NORMAL;
+  g_style = DWRITE_FONT_STYLE_NORMAL;
+  wcscpy_s(g_face, L"Segoe UI");
 }
 
 void text_render_set_dpi(int dpi) {
   if (dpi <= 0) {
     dpi = 96;
   }
-  if (g_dpi == dpi && g_format) {
+  if (g_dpi == dpi && g_dc_rt) {
     return;
   }
   g_dpi = dpi;
-  g_format.Reset();
+  // Font size is in DIPs (DPI-independent); only the DC target needs rebuild.
   g_dc_rt.Reset();
   ensure_format();
   ensure_dc_rt();
+}
+
+void text_render_reload_system_font() {
+  wchar_t face[LF_FACESIZE]{};
+  float size = kFallbackTaskbarFontDip;
+  DWRITE_FONT_WEIGHT weight = DWRITE_FONT_WEIGHT_NORMAL;
+  DWRITE_FONT_STYLE style = DWRITE_FONT_STYLE_NORMAL;
+  if (!read_shell_font(face, &size, &weight, &style)) {
+    wcsncpy_s(face, L"Segoe UI", _TRUNCATE);
+  }
+  if (g_format && wcscmp(face, g_face) == 0 && size == g_size_dip &&
+      weight == g_weight && style == g_style) {
+    return;
+  }
+  wcsncpy_s(g_face, face, _TRUNCATE);
+  g_size_dip = size;
+  g_weight = weight;
+  g_style = style;
+  g_format.Reset();
+  ensure_format();
 }
 
 int text_render_width(const wchar_t* text, bool tabular) {
@@ -149,18 +262,24 @@ int text_render_line_height() {
   if (!ensure_format()) {
     return 0;
   }
+  const auto fallback_px = [&]() {
+    return static_cast<int>(g_size_dip * static_cast<float>(g_dpi) / 96.0f +
+                            0.5f);
+  };
   ComPtr<IDWriteFontCollection> collection;
   if (FAILED(g_format->GetFontCollection(&collection)) || !collection) {
-    return static_cast<int>(font_size_dip(g_dpi) * static_cast<float>(g_dpi) /
-                                96.0f +
-                            0.5f);
+    return fallback_px();
+  }
+  wchar_t family_name[LF_FACESIZE]{};
+  if (FAILED(g_format->GetFontFamilyName(family_name, LF_FACESIZE)) ||
+      family_name[0] == L'\0') {
+    wcsncpy_s(family_name, g_face, _TRUNCATE);
   }
   UINT32 index = 0;
   BOOL exists = FALSE;
-  if (FAILED(collection->FindFamilyName(kUIFont, &index, &exists)) || !exists) {
-    return static_cast<int>(font_size_dip(g_dpi) * static_cast<float>(g_dpi) /
-                                96.0f +
-                            0.5f);
+  if (FAILED(collection->FindFamilyName(family_name, &index, &exists)) ||
+      !exists) {
+    return fallback_px();
   }
   ComPtr<IDWriteFontFamily> family;
   if (FAILED(collection->GetFontFamily(index, &family)) || !family) {
@@ -179,7 +298,7 @@ int text_render_line_height() {
     return 0;
   }
   const float dip =
-      font_size_dip(g_dpi) *
+      g_size_dip *
       static_cast<float>(metrics.ascent + metrics.descent + metrics.lineGap) /
       static_cast<float>(metrics.designUnitsPerEm);
   return static_cast<int>(dip * static_cast<float>(g_dpi) / 96.0f + 0.5f);

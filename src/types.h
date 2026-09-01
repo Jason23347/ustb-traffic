@@ -61,7 +61,9 @@ constexpr int kBackoffCapMs = 30000;
 constexpr unsigned kDefaultQuotaGb = 120;
 constexpr unsigned kDefaultIntervalMs = 1000;
 constexpr unsigned kMinIntervalMs = 500;
-constexpr float kTaskbarFontPt = 6.0f;
+// Shell status font is ~12 DIP; Win11 tray clock/date renders smaller.
+constexpr float kFallbackTaskbarFontDip = 10.0f;
+constexpr float kShellToClockFontScale = 10.0f / 12.0f;
 constexpr unsigned kDefaultTaskbarPadPx = 2;
 constexpr unsigned kDefaultTaskbarGapPx = 8;
 constexpr unsigned kMaxTaskbarPadGapPx = 32;
