@@ -145,6 +145,15 @@ void apply_system_theme() {
   present();
 }
 
+void apply_taskbar_font_from_config() {
+  unsigned font_dip = kTaskbarFontDipAuto;
+  {
+    std::lock_guard<std::mutex> lock(app().mu);
+    font_dip = app().config.taskbar_font_dip;
+  }
+  text_render_set_font_dip(font_dip);
+}
+
 void apply_shell_font() {
   text_render_reload_system_font();
   g_last_x = INT_MIN;
@@ -706,6 +715,7 @@ LRESULT CALLBACK display_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       }
       text_render_init();
       text_render_set_dpi(g_dpi);
+      apply_taskbar_font_from_config();
       refresh_colors();
       SetTimer(hwnd, kPresentTimer, 200, nullptr);
       return 0;
@@ -1026,6 +1036,7 @@ void pause_taskbar_updates(bool pause) {
 }
 
 void invalidate_taskbar_layout() {
+  apply_taskbar_font_from_config();
   g_last_x = INT_MIN;
   present();
 }

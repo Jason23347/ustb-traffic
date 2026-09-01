@@ -68,6 +68,9 @@ constexpr unsigned kDefaultTaskbarPadPx = 8;
 constexpr unsigned kMinTaskbarPadPx = 6;
 constexpr unsigned kDefaultTaskbarGapPx = 8;
 constexpr unsigned kMaxTaskbarPadGapPx = 32;
+constexpr unsigned kTaskbarFontDipAuto = 0;
+constexpr unsigned kMinTaskbarFontDip = 6;
+constexpr unsigned kMaxTaskbarFontDip = 16;
 constexpr unsigned kTaskbarValueWidthSlopPx = 2;
 constexpr int kTaskbarRowGapPx = 0;
 

@@ -7,6 +7,7 @@
 #include <wrl/client.h>
 
 #include <cwchar>
+#include <algorithm>
 
 namespace ustb {
 namespace {
@@ -22,6 +23,7 @@ bool g_drawing = false;
 
 wchar_t g_face[LF_FACESIZE] = L"Segoe UI";
 float g_size_dip = kFallbackTaskbarFontDip;
+unsigned g_user_font_dip = kTaskbarFontDipAuto;
 DWRITE_FONT_WEIGHT g_weight = DWRITE_FONT_WEIGHT_NORMAL;
 DWRITE_FONT_STYLE g_style = DWRITE_FONT_STYLE_NORMAL;
 
@@ -95,20 +97,6 @@ bool read_shell_font(wchar_t face[LF_FACESIZE], float* size_dip,
   return true;
 }
 
-void refresh_shell_font_params() {
-  wchar_t face[LF_FACESIZE]{};
-  float size = kFallbackTaskbarFontDip;
-  DWRITE_FONT_WEIGHT weight = DWRITE_FONT_WEIGHT_NORMAL;
-  DWRITE_FONT_STYLE style = DWRITE_FONT_STYLE_NORMAL;
-  if (!read_shell_font(face, &size, &weight, &style)) {
-    wcsncpy_s(face, L"Segoe UI", _TRUNCATE);
-  }
-  wcsncpy_s(g_face, face, _TRUNCATE);
-  g_size_dip = size;
-  g_weight = weight;
-  g_style = style;
-}
-
 bool ensure_format() {
   if (!g_dwrite) {
     return false;
@@ -135,6 +123,31 @@ bool ensure_format() {
   g_format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
   return true;
 }
+
+void apply_font_params() {
+  wchar_t face[LF_FACESIZE]{};
+  float size = kFallbackTaskbarFontDip;
+  DWRITE_FONT_WEIGHT weight = DWRITE_FONT_WEIGHT_NORMAL;
+  DWRITE_FONT_STYLE style = DWRITE_FONT_STYLE_NORMAL;
+  if (!read_shell_font(face, &size, &weight, &style)) {
+    wcsncpy_s(face, L"Segoe UI", _TRUNCATE);
+  }
+  if (g_user_font_dip > kTaskbarFontDipAuto) {
+    size = static_cast<float>(g_user_font_dip);
+  }
+  if (g_format && wcscmp(face, g_face) == 0 && size == g_size_dip &&
+      weight == g_weight && style == g_style) {
+    return;
+  }
+  wcsncpy_s(g_face, face, _TRUNCATE);
+  g_size_dip = size;
+  g_weight = weight;
+  g_style = style;
+  g_format.Reset();
+  ensure_format();
+}
+
+void refresh_shell_font_params() { apply_font_params(); }
 
 bool ensure_dc_rt() {
   if (!g_d2d || !ensure_format()) {
@@ -202,6 +215,7 @@ void text_render_shutdown() {
   g_d2d.Reset();
   g_dpi = 96;
   g_size_dip = kFallbackTaskbarFontDip;
+  g_user_font_dip = kTaskbarFontDipAuto;
   g_weight = DWRITE_FONT_WEIGHT_NORMAL;
   g_style = DWRITE_FONT_STYLE_NORMAL;
   wcscpy_s(g_face, L"Segoe UI");
@@ -221,24 +235,19 @@ void text_render_set_dpi(int dpi) {
   ensure_dc_rt();
 }
 
-void text_render_reload_system_font() {
-  wchar_t face[LF_FACESIZE]{};
-  float size = kFallbackTaskbarFontDip;
-  DWRITE_FONT_WEIGHT weight = DWRITE_FONT_WEIGHT_NORMAL;
-  DWRITE_FONT_STYLE style = DWRITE_FONT_STYLE_NORMAL;
-  if (!read_shell_font(face, &size, &weight, &style)) {
-    wcsncpy_s(face, L"Segoe UI", _TRUNCATE);
+void text_render_reload_system_font() { apply_font_params(); }
+
+void text_render_set_font_dip(unsigned dip) {
+  if (dip > kTaskbarFontDipAuto) {
+    dip = std::clamp(dip, kMinTaskbarFontDip, kMaxTaskbarFontDip);
+  } else {
+    dip = kTaskbarFontDipAuto;
   }
-  if (g_format && wcscmp(face, g_face) == 0 && size == g_size_dip &&
-      weight == g_weight && style == g_style) {
+  if (g_user_font_dip == dip && g_format) {
     return;
   }
-  wcsncpy_s(g_face, face, _TRUNCATE);
-  g_size_dip = size;
-  g_weight = weight;
-  g_style = style;
-  g_format.Reset();
-  ensure_format();
+  g_user_font_dip = dip;
+  apply_font_params();
 }
 
 int text_render_width(const wchar_t* text, bool tabular) {

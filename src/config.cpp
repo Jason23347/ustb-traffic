@@ -75,6 +75,16 @@ Config load_config() {
   cfg.taskbar_gap_px = std::clamp(parse_u(buf, kDefaultTaskbarGapPx), 0u,
                                   kMaxTaskbarPadGapPx);
 
+  GetPrivateProfileStringW(L"general", L"taskbar_font_dip", L"0", buf,
+                           static_cast<DWORD>(std::size(buf)), path.c_str());
+  const unsigned font_dip = parse_u(buf, kTaskbarFontDipAuto);
+  if (font_dip == kTaskbarFontDipAuto) {
+    cfg.taskbar_font_dip = kTaskbarFontDipAuto;
+  } else {
+    cfg.taskbar_font_dip =
+        std::clamp(font_dip, kMinTaskbarFontDip, kMaxTaskbarFontDip);
+  }
+
   GetPrivateProfileStringW(L"general", L"usage_mode", L"0", buf,
                            static_cast<DWORD>(std::size(buf)), path.c_str());
   const unsigned mode = parse_u(buf, 0);
@@ -106,6 +116,8 @@ void save_config(const Config& cfg) {
   WritePrivateProfileStringW(L"general", L"taskbar_pad_px", num, path.c_str());
   swprintf_s(num, L"%u", cfg.taskbar_gap_px);
   WritePrivateProfileStringW(L"general", L"taskbar_gap_px", num, path.c_str());
+  swprintf_s(num, L"%u", cfg.taskbar_font_dip);
+  WritePrivateProfileStringW(L"general", L"taskbar_font_dip", num, path.c_str());
   swprintf_s(num, L"%u", static_cast<unsigned>(cfg.usage_mode));
   WritePrivateProfileStringW(L"general", L"usage_mode", num, path.c_str());
   swprintf_s(num, L"%u", static_cast<unsigned>(cfg.taskbar_side));

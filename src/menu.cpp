@@ -16,17 +16,19 @@ namespace {
 
 constexpr wchar_t kOptClass[] = L"UstbTrafficOptions";
 constexpr int kOptClientW = 456;
-constexpr int kOptClientH = 356;
+constexpr int kOptClientH = 396;
 constexpr int IDC_HOST = 2001;
 constexpr int IDC_INTERVAL = 2002;
 constexpr int IDC_QUOTA = 2003;
 constexpr int IDC_PAD = 2004;
 constexpr int IDC_GAP = 2005;
+constexpr int IDC_FONT = 2006;
 constexpr int IDC_HINT = 2010;
 constexpr int IDC_UNIT_MS = 2011;
 constexpr int IDC_UNIT_GB = 2012;
 constexpr int IDC_UNIT_PX = 2013;
 constexpr int IDC_UNIT_GAP = 2014;
+constexpr int IDC_UNIT_FONT = 2015;
 constexpr int IDC_OK = IDOK;
 constexpr int IDC_CANCEL = IDCANCEL;
 
@@ -102,6 +104,7 @@ LRESULT CALLBACK options_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
           std::wstring quota_s = get_text(GetDlgItem(hwnd, IDC_QUOTA));
           std::wstring pad_s = get_text(GetDlgItem(hwnd, IDC_PAD));
           std::wstring gap_s = get_text(GetDlgItem(hwnd, IDC_GAP));
+          std::wstring font_s = get_text(GetDlgItem(hwnd, IDC_FONT));
           unsigned port = 80;
           std::wstring path = L"/";
           strip_host_path(host, port, path);
@@ -116,10 +119,16 @@ LRESULT CALLBACK options_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
               static_cast<unsigned>(wcstoul(quota_s.c_str(), nullptr, 10));
           unsigned pad = static_cast<unsigned>(wcstoul(pad_s.c_str(), nullptr, 10));
           unsigned gap = static_cast<unsigned>(wcstoul(gap_s.c_str(), nullptr, 10));
+          unsigned font_dip =
+              static_cast<unsigned>(wcstoul(font_s.c_str(), nullptr, 10));
           interval = std::clamp(interval, kMinIntervalMs, 60000u);
           quota = std::clamp(quota, 1u, 10000u);
           pad = std::clamp(pad, kMinTaskbarPadPx, kMaxTaskbarPadGapPx);
           gap = std::clamp(gap, 0u, kMaxTaskbarPadGapPx);
+          if (font_dip != kTaskbarFontDipAuto) {
+            font_dip =
+                std::clamp(font_dip, kMinTaskbarFontDip, kMaxTaskbarFontDip);
+          }
           Config cfg;
           {
             std::lock_guard<std::mutex> lock(app().mu);
@@ -130,6 +139,7 @@ LRESULT CALLBACK options_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             app().config.quota_gb = quota;
             app().config.taskbar_pad_px = pad;
             app().config.taskbar_gap_px = gap;
+            app().config.taskbar_font_dip = font_dip;
             cfg = app().config;
           }
           save_config(cfg);
@@ -150,7 +160,7 @@ LRESULT CALLBACK options_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       SetBkMode(dc, TRANSPARENT);
       const int id = GetDlgCtrlID(ctl);
       if (id == IDC_HINT || id == IDC_UNIT_MS || id == IDC_UNIT_GB ||
-          id == IDC_UNIT_PX || id == IDC_UNIT_GAP) {
+          id == IDC_UNIT_PX || id == IDC_UNIT_GAP || id == IDC_UNIT_FONT) {
         SetTextColor(dc, RGB(110, 110, 110));
       } else {
         SetTextColor(dc, RGB(32, 32, 32));
@@ -361,8 +371,16 @@ void show_options_dialog(HWND parent) {
   add_label(g_opt, app().instance, IDC_UNIT_GAP, L"px", unit_x, dpx(182), dpx(36),
             row_h);
 
+  swprintf_s(num, L"%u", cfg.taskbar_font_dip);
+  add_label(g_opt, app().instance, 0, L"字体大小", label_x, dpx(222), label_w,
+            row_h);
+  add_edit(g_opt, app().instance, IDC_FONT, num, edit_x, dpx(222), num_w, row_h,
+           ES_NUMBER);
+  add_label(g_opt, app().instance, IDC_UNIT_FONT, L"DIP", unit_x, dpx(222),
+            dpx(48), row_h);
+
   add_label(g_opt, app().instance, IDC_HINT,
-            L"地址例如 202.204.48.82 或 login.ustb.edu.cn", label_x, dpx(228),
+            L"地址例如 202.204.48.82；字体 0 表示自动跟随系统", label_x, dpx(268),
             dpx(kOptClientW) - dpx(48), dpx(22));
 
   const int btn_w = dpx(88);

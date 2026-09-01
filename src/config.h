@@ -14,6 +14,7 @@ struct Config {
   unsigned quota_gb = kDefaultQuotaGb;
   unsigned taskbar_pad_px = kDefaultTaskbarPadPx;
   unsigned taskbar_gap_px = kDefaultTaskbarGapPx;
+  unsigned taskbar_font_dip = kTaskbarFontDipAuto;
   UsageMode usage_mode = UsageMode::Absolute;
   TaskbarSide taskbar_side = TaskbarSide::Right;
 };
