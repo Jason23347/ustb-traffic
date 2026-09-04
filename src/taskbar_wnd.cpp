@@ -12,6 +12,7 @@
 #include <windowsx.h>
 
 #include <algorithm>
+#include <cmath>
 #include <climits>
 #include <cstring>
 #include <mutex>
@@ -27,6 +28,25 @@ constexpr wchar_t kFlyoutClass[] = L"UstbTrafficFlyout";
 constexpr UINT kPresentTimer = 1;
 constexpr UINT kEmbedTimer = 2;
 constexpr UINT kFlyoutTimer = 3;
+constexpr UINT kFlyoutAnimTimer = 4;
+// Custom flyout fade (not system tooltip SPI); long enough to read clearly.
+constexpr UINT kFlyoutFadeMs = 160;
+constexpr UINT kFlyoutAnimIntervalMs = 16;
+// ThemeShadow depth for ToolTip is 16px; pad enough for blur + y-offset.
+constexpr int kFlyoutShadowBlurDip = 16;
+constexpr int kFlyoutShadowYOffsetDip = 4;
+constexpr int kFlyoutShadowPadDip = 28;
+
+enum class FlyoutVis : BYTE { Hidden, FadingIn, Shown, FadingOut };
+
+struct FlyoutSurface {
+  HDC mem = nullptr;
+  HBITMAP dib = nullptr;
+  HGDIOBJ old_bmp = nullptr;
+  int width = 0;
+  int height = 0;
+  POINT pos{};
+};
 
 HWND g_host = nullptr;
 HWND g_hwnd = nullptr;
@@ -40,6 +60,12 @@ bool g_user_exit = false;
 bool g_hovered = false;
 bool g_tracking_mouse = false;
 bool g_flyout_pending = false;
+FlyoutVis g_flyout_vis = FlyoutVis::Hidden;
+float g_flyout_opacity = 0.0f;
+float g_flyout_anim_from = 0.0f;
+float g_flyout_anim_to = 0.0f;
+ULONGLONG g_flyout_anim_start = 0;
+FlyoutSurface g_flyout_surf{};
 int g_last_x = INT_MIN;
 int g_last_y = INT_MIN;
 int g_last_w = 0;
@@ -50,10 +76,16 @@ void attach_tray_owner();
 bool present();
 bool popup_menu_open();
 void hide_flyout();
+void dismiss_flyout();
 void update_flyout();
 void cancel_flyout_timer();
+void cancel_flyout_anim();
 void schedule_flyout();
 void set_hovered(bool hovered);
+void free_flyout_surface();
+bool present_flyout_surface();
+void begin_flyout_fade(float target);
+void tick_flyout_anim();
 
 UINT flyout_delay_ms() {
   UINT ms = 400;
@@ -214,9 +246,161 @@ std::vector<std::wstring> split_lines(const std::wstring& text) {
   return lines;
 }
 
+float ease_out_cubic(float t) {
+  const float u = 1.0f - t;
+  return 1.0f - u * u * u;
+}
+
+float ease_in_cubic(float t) { return t * t * t; }
+
+BYTE flyout_alpha_byte() {
+  const float o = (std::max)(0.0f, (std::min)(1.0f, g_flyout_opacity));
+  return static_cast<BYTE>(std::lround(o * 255.0f));
+}
+
+void free_flyout_surface() {
+  if (g_flyout_surf.mem && g_flyout_surf.old_bmp) {
+    SelectObject(g_flyout_surf.mem, g_flyout_surf.old_bmp);
+  }
+  if (g_flyout_surf.dib) {
+    DeleteObject(g_flyout_surf.dib);
+  }
+  if (g_flyout_surf.mem) {
+    DeleteDC(g_flyout_surf.mem);
+  }
+  g_flyout_surf = {};
+}
+
+// Must re-submit hdcSrc each frame: UpdateLayeredWindow(nullptr hdcSrc) does
+// not reliably change SourceConstantAlpha on layered per-pixel surfaces.
+bool present_flyout_surface() {
+  if (!g_flyout || !IsWindow(g_flyout) || !g_flyout_surf.mem ||
+      g_flyout_surf.width <= 0 || g_flyout_surf.height <= 0) {
+    return false;
+  }
+  POINT pt_src{0, 0};
+  SIZE size{g_flyout_surf.width, g_flyout_surf.height};
+  BLENDFUNCTION blend{};
+  blend.BlendOp = AC_SRC_OVER;
+  blend.SourceConstantAlpha = flyout_alpha_byte();
+  blend.AlphaFormat = AC_SRC_ALPHA;
+  HDC screen = GetDC(nullptr);
+  const BOOL ok =
+      UpdateLayeredWindow(g_flyout, screen, &g_flyout_surf.pos, &size,
+                          g_flyout_surf.mem, &pt_src, 0, &blend, ULW_ALPHA);
+  ReleaseDC(nullptr, screen);
+  if (ok) {
+    SetWindowPos(g_flyout, HWND_TOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  }
+  return ok != FALSE;
+}
+
+void cancel_flyout_anim() {
+  if (g_hwnd) {
+    KillTimer(g_hwnd, kFlyoutAnimTimer);
+  }
+}
+
 void hide_flyout() {
+  cancel_flyout_anim();
+  g_flyout_opacity = 0.0f;
+  g_flyout_vis = FlyoutVis::Hidden;
+  free_flyout_surface();
   if (g_flyout && IsWindowVisible(g_flyout)) {
     ShowWindow(g_flyout, SW_HIDE);
+  }
+}
+
+void begin_flyout_fade(float target) {
+  target = target <= 0.0f ? 0.0f : 1.0f;
+  if (std::fabs(g_flyout_opacity - target) < 0.001f) {
+    cancel_flyout_anim();
+    g_flyout_opacity = target;
+    g_flyout_vis = target <= 0.0f ? FlyoutVis::Hidden : FlyoutVis::Shown;
+    if (target <= 0.0f && g_flyout) {
+      ShowWindow(g_flyout, SW_HIDE);
+      free_flyout_surface();
+    } else {
+      present_flyout_surface();
+    }
+    return;
+  }
+  g_flyout_anim_from = g_flyout_opacity;
+  g_flyout_anim_to = target;
+  g_flyout_anim_start = GetTickCount64();
+  g_flyout_vis = target > g_flyout_anim_from ? FlyoutVis::FadingIn
+                                             : FlyoutVis::FadingOut;
+  if (g_hwnd) {
+    SetTimer(g_hwnd, kFlyoutAnimTimer, kFlyoutAnimIntervalMs, nullptr);
+  }
+  tick_flyout_anim();
+}
+
+void tick_flyout_anim() {
+  if (g_flyout_vis != FlyoutVis::FadingIn &&
+      g_flyout_vis != FlyoutVis::FadingOut) {
+    return;
+  }
+  const ULONGLONG now = GetTickCount64();
+  float t = static_cast<float>(now - g_flyout_anim_start) /
+            static_cast<float>(kFlyoutFadeMs);
+  if (t >= 1.0f) {
+    t = 1.0f;
+  }
+  const bool fading_in = g_flyout_anim_to > g_flyout_anim_from;
+  const float eased = fading_in ? ease_out_cubic(t) : ease_in_cubic(t);
+  g_flyout_opacity =
+      g_flyout_anim_from + (g_flyout_anim_to - g_flyout_anim_from) * eased;
+  present_flyout_surface();
+  if (t < 1.0f) {
+    return;
+  }
+  const float target = g_flyout_anim_to;
+  cancel_flyout_anim();
+  g_flyout_opacity = target;
+  if (g_flyout_opacity <= 0.0f) {
+    g_flyout_vis = FlyoutVis::Hidden;
+    g_flyout_opacity = 0.0f;
+    free_flyout_surface();
+    if (g_flyout) {
+      ShowWindow(g_flyout, SW_HIDE);
+    }
+  } else {
+    g_flyout_vis = FlyoutVis::Shown;
+    g_flyout_opacity = 1.0f;
+    present_flyout_surface();
+  }
+}
+
+void dismiss_flyout() {
+  if (g_flyout_vis == FlyoutVis::Hidden &&
+      !(g_flyout && IsWindowVisible(g_flyout))) {
+    return;
+  }
+  begin_flyout_fade(0.0f);
+}
+
+// Soft ambient + directional shadow approximating Win11 ThemeShadow @ 16px.
+// Dark theme needs a denser shadow — the same black @ ~0.28 disappears on the
+// taskbar / dark wallpaper, while light surfaces read fine with a softer lift.
+void paint_flyout_shadow(const RECT& content, float radius_px) {
+  const int blur_dip = g_light_theme ? kFlyoutShadowBlurDip : 20;
+  const int blur = MulDiv(blur_dip, g_dpi, 96);
+  const int y_off = MulDiv(kFlyoutShadowYOffsetDip, g_dpi, 96);
+  const float strength = g_light_theme ? 0.28f : 0.62f;
+  constexpr int kSteps = 12;
+  for (int i = 1; i <= kSteps; ++i) {
+    const float t = static_cast<float>(i) / static_cast<float>(kSteps);
+    const int expand =
+        static_cast<int>(std::lround(static_cast<float>(blur) * t));
+    const RECT rc{content.left - expand, content.top - expand + y_off,
+                  content.right + expand, content.bottom + expand + y_off};
+    const float falloff = 1.0f - t;
+    const float alpha =
+        strength * falloff * falloff / static_cast<float>(kSteps);
+    text_render_fill_rounded_rect(
+        rc, radius_px + static_cast<float>(expand), RGB(0, 0, 0), alpha);
   }
 }
 
@@ -230,17 +414,21 @@ bool paint_flyout(HWND hwnd) {
   const int pad = MulDiv(14, g_dpi, 96);
   const int line_h = (std::max)(1, text_render_line_height());
   const int line_gap = MulDiv(2, g_dpi, 96);
-  int content_w = 0;
+  int text_w = 0;
   for (const auto& line : lines) {
-    content_w = (std::max)(content_w, text_render_width(line.c_str(), false));
+    text_w = (std::max)(text_w, text_render_width(line.c_str(), false));
   }
-  const int width = content_w + pad * 2;
-  const int height =
+  const int content_w = text_w + pad * 2;
+  const int content_h =
       pad * 2 + static_cast<int>(lines.size()) * line_h +
       (std::max)(0, static_cast<int>(lines.size()) - 1) * line_gap;
-  if (width < 8 || height < 8) {
+  if (content_w < 8 || content_h < 8) {
     return false;
   }
+
+  const int shadow_pad = MulDiv(kFlyoutShadowPadDip, g_dpi, 96);
+  const int width = content_w + shadow_pad * 2;
+  const int height = content_h + shadow_pad * 2;
 
   HDC screen = GetDC(nullptr);
   BITMAPINFO bmi{};
@@ -254,12 +442,12 @@ bool paint_flyout(HWND hwnd) {
   HDC mem = CreateCompatibleDC(screen);
   HBITMAP dib =
       CreateDIBSection(mem, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
+  ReleaseDC(nullptr, screen);
   if (!dib || !bits) {
     if (dib) {
       DeleteObject(dib);
     }
     DeleteDC(mem);
-    ReleaseDC(nullptr, screen);
     return false;
   }
   HGDIOBJ old_bmp = SelectObject(mem, dib);
@@ -267,6 +455,8 @@ bool paint_flyout(HWND hwnd) {
                            4);
 
   const RECT bounds{0, 0, width, height};
+  const RECT content{shadow_pad, shadow_pad, shadow_pad + content_w,
+                     shadow_pad + content_h};
   const float radius = static_cast<float>(MulDiv(8, g_dpi, 96));
   const COLORREF bg =
       g_light_theme ? RGB(252, 252, 252) : RGB(32, 32, 32);
@@ -274,13 +464,14 @@ bool paint_flyout(HWND hwnd) {
       g_light_theme ? RGB(0, 0, 0) : RGB(255, 255, 255);
   const COLORREF fg = g_light_theme ? RGB(26, 26, 26) : RGB(255, 255, 255);
   if (text_render_begin(mem, bounds)) {
+    paint_flyout_shadow(content, radius);
     // Fully opaque like the Win11 clock tip (not acrylic/translucent).
-    text_render_fill_rounded_rect(bounds, radius, bg, 1.0f);
-    text_render_draw_rounded_rect(bounds, radius, border, 0.10f,
+    text_render_fill_rounded_rect(content, radius, bg, 1.0f);
+    text_render_draw_rounded_rect(content, radius, border, 0.10f,
                                   static_cast<float>(MulDiv(1, g_dpi, 96)));
-    int y = pad;
+    int y = content.top + pad;
     for (const auto& line : lines) {
-      RECT rc{pad, y, width - pad, y + line_h};
+      RECT rc{content.left + pad, y, content.right - pad, y + line_h};
       text_render_draw(line.c_str(), rc, fg, false, false);
       y += line_h + line_gap;
     }
@@ -292,46 +483,36 @@ bool paint_flyout(HWND hwnd) {
     SelectObject(mem, old_bmp);
     DeleteObject(dib);
     DeleteDC(mem);
-    ReleaseDC(nullptr, screen);
     return false;
   }
   const int gap = MulDiv(8, g_dpi, 96);
-  int screen_x = anchor.left + (anchor.right - anchor.left - width) / 2;
-  int screen_y = anchor.top - gap - height;
+  int screen_x =
+      anchor.left + (anchor.right - anchor.left - content_w) / 2 - shadow_pad;
+  int screen_y = anchor.top - gap - content_h - shadow_pad;
   MONITORINFO mi{};
   mi.cbSize = sizeof(mi);
   if (GetMonitorInfoW(MonitorFromWindow(g_hwnd, MONITOR_DEFAULTTONEAREST),
                       &mi)) {
     const int margin = MulDiv(8, g_dpi, 96);
-    if (screen_x < mi.rcWork.left + margin) {
-      screen_x = mi.rcWork.left + margin;
+    if (screen_x + shadow_pad < mi.rcWork.left + margin) {
+      screen_x = mi.rcWork.left + margin - shadow_pad;
     }
-    if (screen_x + width > mi.rcWork.right - margin) {
-      screen_x = mi.rcWork.right - margin - width;
+    if (screen_x + shadow_pad + content_w > mi.rcWork.right - margin) {
+      screen_x = mi.rcWork.right - margin - content_w - shadow_pad;
     }
-    if (screen_y < mi.rcWork.top + margin) {
-      screen_y = anchor.bottom + gap;
+    if (screen_y + shadow_pad < mi.rcWork.top + margin) {
+      screen_y = anchor.bottom + gap - shadow_pad;
     }
   }
 
-  POINT pt_dst{screen_x, screen_y};
-  POINT pt_src{0, 0};
-  SIZE size{width, height};
-  BLENDFUNCTION blend{};
-  blend.BlendOp = AC_SRC_OVER;
-  blend.SourceConstantAlpha = 255;
-  blend.AlphaFormat = AC_SRC_ALPHA;
-  const BOOL ok =
-      UpdateLayeredWindow(hwnd, screen, &pt_dst, &size, mem, &pt_src, 0,
-                          &blend, ULW_ALPHA);
-  SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-               SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-
-  SelectObject(mem, old_bmp);
-  DeleteObject(dib);
-  DeleteDC(mem);
-  ReleaseDC(nullptr, screen);
-  return ok != FALSE;
+  free_flyout_surface();
+  g_flyout_surf.mem = mem;
+  g_flyout_surf.dib = dib;
+  g_flyout_surf.old_bmp = old_bmp;
+  g_flyout_surf.width = width;
+  g_flyout_surf.height = height;
+  g_flyout_surf.pos = {screen_x, screen_y};
+  return present_flyout_surface();
 }
 
 LRESULT CALLBACK flyout_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -373,8 +554,18 @@ void update_flyout() {
   if (!g_flyout) {
     return;
   }
-  if (paint_flyout(g_flyout)) {
-    ShowWindow(g_flyout, SW_SHOWNOACTIVATE);
+  const bool was_hidden = g_flyout_vis == FlyoutVis::Hidden ||
+                          !IsWindowVisible(g_flyout);
+  const bool was_fading_out = g_flyout_vis == FlyoutVis::FadingOut;
+  if (was_hidden) {
+    g_flyout_opacity = 0.0f;
+  }
+  if (!paint_flyout(g_flyout)) {
+    return;
+  }
+  ShowWindow(g_flyout, SW_SHOWNOACTIVATE);
+  if (was_hidden || was_fading_out) {
+    begin_flyout_fade(1.0f);
   }
 }
 
@@ -402,7 +593,7 @@ void set_hovered(bool hovered) {
   g_hovered = hovered;
   if (!hovered) {
     cancel_flyout_timer();
-    hide_flyout();
+    dismiss_flyout();
   }
   present();
   if (hovered) {
@@ -694,7 +885,7 @@ bool present() {
     update_hit_region(width, height);
   }
   if (ok && g_hovered && !g_flyout_pending && g_flyout &&
-      IsWindowVisible(g_flyout)) {
+      IsWindowVisible(g_flyout) && g_flyout_vis == FlyoutVis::Shown) {
     update_flyout();
   }
 
@@ -756,6 +947,8 @@ LRESULT CALLBACK display_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (g_hovered) {
           update_flyout();
         }
+      } else if (wp == kFlyoutAnimTimer) {
+        tick_flyout_anim();
       }
       return 0;
     case WM_RBUTTONUP: {
@@ -852,6 +1045,7 @@ LRESULT CALLBACK display_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_DESTROY:
       KillTimer(hwnd, kPresentTimer);
       cancel_flyout_timer();
+      cancel_flyout_anim();
       hide_flyout();
       if (g_flyout) {
         DestroyWindow(g_flyout);
