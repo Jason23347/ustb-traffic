@@ -75,7 +75,7 @@ constexpr unsigned kTaskbarValueWidthSlopPx = 2;
 constexpr int kTaskbarRowGapPx = 0;
 
 inline constexpr wchar_t kAppName[] = L"UstbTraffic";
-inline constexpr wchar_t kAppVersion[] = L"1.1.0";
+inline constexpr wchar_t kAppVersion[] = L"1.1.1";
 inline constexpr wchar_t kAppTagline[] =
     L"北京科技大学校园网流量任务栏监视器";
 inline constexpr wchar_t kAppAuthor[] = L"Shuaicheng Zhu & Cursor";
