@@ -29,13 +29,24 @@ constexpr UINT kPresentTimer = 1;
 constexpr UINT kEmbedTimer = 2;
 constexpr UINT kFlyoutTimer = 3;
 constexpr UINT kFlyoutAnimTimer = 4;
-// Custom flyout fade (not system tooltip SPI); long enough to read clearly.
-constexpr UINT kFlyoutFadeMs = 160;
+constexpr UINT kHoverBgAnimTimer = 5;
+// PopInThemeAnimation uses ControlFastAnimationDuration (167ms): opacity +
+// vertical translation (Fluent timing-and-easing).
+constexpr UINT kFlyoutFadeMs = 167;
 constexpr UINT kFlyoutAnimIntervalMs = 16;
-// ThemeShadow depth for ToolTip is 16px; pad enough for blur + y-offset.
-constexpr int kFlyoutShadowBlurDip = 16;
-constexpr int kFlyoutShadowYOffsetDip = 4;
-constexpr int kFlyoutShadowPadDip = 28;
+// Typical tooltip PopIn FromVerticalOffset (~40–50 DIP guidance).
+constexpr int kFlyoutPopOffsetDip = 40;
+// Win11 taskbar OmniButton uses Border.BackgroundTransition / BrushTransition
+// at ControlFasterAnimationDuration (83ms) for PointerOver fill crossfade.
+constexpr UINT kHoverBgFadeMs = 83;
+// Official WPF Fluent ToolTip DropShadowEffect (PresentationFramework.Fluent
+// Styles/ToolTip.xaml): BlurRadius=30, Opacity=0.4, ShadowDepth=0,
+// Direction=0, Color=#202020. CornerRadius=4.
+constexpr int kFlyoutShadowBlurDip = 30;
+constexpr float kFlyoutShadowOpacity = 0.4f;
+constexpr COLORREF kFlyoutShadowColor = RGB(0x20, 0x20, 0x20);
+constexpr int kFlyoutShadowPadDip = 36;
+constexpr int kFlyoutCornerRadiusDip = 4;
 
 enum class FlyoutVis : BYTE { Hidden, FadingIn, Shown, FadingOut };
 
@@ -66,6 +77,13 @@ float g_flyout_anim_from = 0.0f;
 float g_flyout_anim_to = 0.0f;
 ULONGLONG g_flyout_anim_start = 0;
 FlyoutSurface g_flyout_surf{};
+bool g_flyout_above = true;
+// 0..1 multiplier on OmniButton PointerOver fill (BrushTransition progress).
+float g_hover_bg = 0.0f;
+float g_hover_bg_from = 0.0f;
+float g_hover_bg_to = 0.0f;
+ULONGLONG g_hover_bg_start = 0;
+bool g_hover_bg_animating = false;
 int g_last_x = INT_MIN;
 int g_last_y = INT_MIN;
 int g_last_w = 0;
@@ -86,6 +104,10 @@ void free_flyout_surface();
 bool present_flyout_surface();
 void begin_flyout_fade(float target);
 void tick_flyout_anim();
+void cancel_hover_bg_anim();
+void begin_hover_bg_fade(float target);
+void tick_hover_bg_anim();
+void snap_hover_bg(float value);
 
 UINT flyout_delay_ms() {
   UINT ms = 400;
@@ -278,6 +300,18 @@ bool present_flyout_surface() {
       g_flyout_surf.width <= 0 || g_flyout_surf.height <= 0) {
     return false;
   }
+  // PopIn: opacity + vertical slide. Dismiss: fade in place (no translation).
+  float slide = 0.0f;
+  if (g_flyout_vis == FlyoutVis::FadingIn) {
+    slide = 1.0f - (std::max)(0.0f, (std::min)(1.0f, g_flyout_opacity));
+  }
+  const int pop_px = MulDiv(kFlyoutPopOffsetDip, g_dpi, 96);
+  POINT pos = g_flyout_surf.pos;
+  const int dy =
+      static_cast<int>(std::lround(static_cast<float>(pop_px) * slide));
+  // Tip above trigger slides up into place (starts lower / toward the bar).
+  pos.y += g_flyout_above ? dy : -dy;
+
   POINT pt_src{0, 0};
   SIZE size{g_flyout_surf.width, g_flyout_surf.height};
   BLENDFUNCTION blend{};
@@ -286,8 +320,8 @@ bool present_flyout_surface() {
   blend.AlphaFormat = AC_SRC_ALPHA;
   HDC screen = GetDC(nullptr);
   const BOOL ok =
-      UpdateLayeredWindow(g_flyout, screen, &g_flyout_surf.pos, &size,
-                          g_flyout_surf.mem, &pt_src, 0, &blend, ULW_ALPHA);
+      UpdateLayeredWindow(g_flyout, screen, &pos, &size, g_flyout_surf.mem,
+                          &pt_src, 0, &blend, ULW_ALPHA);
   ReleaseDC(nullptr, screen);
   if (ok) {
     SetWindowPos(g_flyout, HWND_TOPMOST, 0, 0, 0, 0,
@@ -381,26 +415,22 @@ void dismiss_flyout() {
   begin_flyout_fade(0.0f);
 }
 
-// Soft ambient + directional shadow approximating Win11 ThemeShadow @ 16px.
-// Dark theme needs a denser shadow — the same black @ ~0.28 disappears on the
-// taskbar / dark wallpaper, while light surfaces read fine with a softer lift.
+// Official WPF Fluent ToolTip DropShadowEffect approximation:
+// BlurRadius=30, Opacity=0.4, ShadowDepth=0, Direction=0, Color=#202020.
 void paint_flyout_shadow(const RECT& content, float radius_px) {
-  const int blur_dip = g_light_theme ? kFlyoutShadowBlurDip : 20;
-  const int blur = MulDiv(blur_dip, g_dpi, 96);
-  const int y_off = MulDiv(kFlyoutShadowYOffsetDip, g_dpi, 96);
-  const float strength = g_light_theme ? 0.28f : 0.62f;
-  constexpr int kSteps = 12;
+  const int blur = MulDiv(kFlyoutShadowBlurDip, g_dpi, 96);
+  constexpr int kSteps = 16;
   for (int i = 1; i <= kSteps; ++i) {
     const float t = static_cast<float>(i) / static_cast<float>(kSteps);
     const int expand =
         static_cast<int>(std::lround(static_cast<float>(blur) * t));
-    const RECT rc{content.left - expand, content.top - expand + y_off,
-                  content.right + expand, content.bottom + expand + y_off};
+    const RECT rc{content.left - expand, content.top - expand,
+                  content.right + expand, content.bottom + expand};
     const float falloff = 1.0f - t;
     const float alpha =
-        strength * falloff * falloff / static_cast<float>(kSteps);
+        kFlyoutShadowOpacity * falloff * falloff / static_cast<float>(kSteps);
     text_render_fill_rounded_rect(
-        rc, radius_px + static_cast<float>(expand), RGB(0, 0, 0), alpha);
+        rc, radius_px + static_cast<float>(expand), kFlyoutShadowColor, alpha);
   }
 }
 
@@ -457,7 +487,8 @@ bool paint_flyout(HWND hwnd) {
   const RECT bounds{0, 0, width, height};
   const RECT content{shadow_pad, shadow_pad, shadow_pad + content_w,
                      shadow_pad + content_h};
-  const float radius = static_cast<float>(MulDiv(8, g_dpi, 96));
+  const float radius =
+      static_cast<float>(MulDiv(kFlyoutCornerRadiusDip, g_dpi, 96));
   const COLORREF bg =
       g_light_theme ? RGB(252, 252, 252) : RGB(32, 32, 32);
   const COLORREF border =
@@ -489,6 +520,7 @@ bool paint_flyout(HWND hwnd) {
   int screen_x =
       anchor.left + (anchor.right - anchor.left - content_w) / 2 - shadow_pad;
   int screen_y = anchor.top - gap - content_h - shadow_pad;
+  bool above = true;
   MONITORINFO mi{};
   mi.cbSize = sizeof(mi);
   if (GetMonitorInfoW(MonitorFromWindow(g_hwnd, MONITOR_DEFAULTTONEAREST),
@@ -502,8 +534,10 @@ bool paint_flyout(HWND hwnd) {
     }
     if (screen_y + shadow_pad < mi.rcWork.top + margin) {
       screen_y = anchor.bottom + gap - shadow_pad;
+      above = false;
     }
   }
+  g_flyout_above = above;
 
   free_flyout_surface();
   g_flyout_surf.mem = mem;
@@ -586,17 +620,69 @@ void schedule_flyout() {
   SetTimer(g_hwnd, kFlyoutTimer, flyout_delay_ms(), nullptr);
 }
 
+void cancel_hover_bg_anim() {
+  g_hover_bg_animating = false;
+  if (g_hwnd) {
+    KillTimer(g_hwnd, kHoverBgAnimTimer);
+  }
+}
+
+void snap_hover_bg(float value) {
+  cancel_hover_bg_anim();
+  g_hover_bg = value <= 0.0f ? 0.0f : 1.0f;
+  g_hover_bg_from = g_hover_bg;
+  g_hover_bg_to = g_hover_bg;
+}
+
+void tick_hover_bg_anim() {
+  if (!g_hover_bg_animating) {
+    return;
+  }
+  const ULONGLONG now = GetTickCount64();
+  float t = static_cast<float>(now - g_hover_bg_start) /
+            static_cast<float>(kHoverBgFadeMs);
+  if (t >= 1.0f) {
+    t = 1.0f;
+  }
+  // BrushTransition interpolates brushes linearly over its Duration.
+  g_hover_bg = g_hover_bg_from + (g_hover_bg_to - g_hover_bg_from) * t;
+  present();
+  if (t < 1.0f) {
+    return;
+  }
+  const float target = g_hover_bg_to;
+  cancel_hover_bg_anim();
+  g_hover_bg = target;
+  present();
+}
+
+void begin_hover_bg_fade(float target) {
+  target = target <= 0.0f ? 0.0f : 1.0f;
+  if (std::fabs(g_hover_bg - target) < 0.001f) {
+    snap_hover_bg(target);
+    present();
+    return;
+  }
+  g_hover_bg_from = g_hover_bg;
+  g_hover_bg_to = target;
+  g_hover_bg_start = GetTickCount64();
+  g_hover_bg_animating = true;
+  if (g_hwnd) {
+    SetTimer(g_hwnd, kHoverBgAnimTimer, kFlyoutAnimIntervalMs, nullptr);
+  }
+  tick_hover_bg_anim();
+}
+
 void set_hovered(bool hovered) {
   if (g_hovered == hovered) {
     return;
   }
   g_hovered = hovered;
+  begin_hover_bg_fade(hovered ? 1.0f : 0.0f);
   if (!hovered) {
     cancel_flyout_timer();
     dismiss_flyout();
-  }
-  present();
-  if (hovered) {
+  } else {
     schedule_flyout();
   }
 }
@@ -700,6 +786,7 @@ void hide_for_fullscreen() {
   }
   cancel_flyout_timer();
   hide_flyout();
+  snap_hover_bg(0.0f);
   g_hovered = false;
   g_tracking_mouse = false;
 }
@@ -819,18 +906,19 @@ bool present() {
 
   const RECT bounds{0, 0, width, height};
   if (text_render_begin(mem, bounds)) {
-    if (g_hovered) {
+    if (g_hover_bg > 0.001f) {
       // Match Win11 SystemTray OmniButton PointerOver:
       // OmniButtonBackgroundPointerOver -> ShellTaskbarItemFillColorSecondary
       // Light: #80FFFFFF, Dark: #0FFFFFFF (TaskbarResources.xbf)
       // CornerRadius: ControlLargeCornerRadius = 4
+      // Fill crossfades via BrushTransition (ControlFasterAnimationDuration).
       const int inset_y = MulDiv(4, g_dpi, 96);
       RECT bg{0, inset_y, width, height - inset_y};
       if (bg.right > bg.left && bg.bottom > bg.top) {
         const float radius = static_cast<float>(MulDiv(4, g_dpi, 96));
         const COLORREF fill = RGB(255, 255, 255);
-        const float alpha = g_light_theme ? (0x80 / 255.0f) : (0x0F / 255.0f);
-        text_render_fill_rounded_rect(bg, radius, fill, alpha);
+        const float base = g_light_theme ? (0x80 / 255.0f) : (0x0F / 255.0f);
+        text_render_fill_rounded_rect(bg, radius, fill, base * g_hover_bg);
       }
     }
     auto draw_row = [&](const std::wstring& label, const std::wstring& value,
@@ -949,6 +1037,8 @@ LRESULT CALLBACK display_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
       } else if (wp == kFlyoutAnimTimer) {
         tick_flyout_anim();
+      } else if (wp == kHoverBgAnimTimer) {
+        tick_hover_bg_anim();
       }
       return 0;
     case WM_RBUTTONUP: {
@@ -1046,6 +1136,7 @@ LRESULT CALLBACK display_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       KillTimer(hwnd, kPresentTimer);
       cancel_flyout_timer();
       cancel_flyout_anim();
+      cancel_hover_bg_anim();
       hide_flyout();
       if (g_flyout) {
         DestroyWindow(g_flyout);
@@ -1054,6 +1145,7 @@ LRESULT CALLBACK display_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       text_render_shutdown();
       g_hwnd = nullptr;
       g_hovered = false;
+      g_hover_bg = 0.0f;
       g_tracking_mouse = false;
       g_tray_owner = nullptr;
       g_last_x = INT_MIN;
