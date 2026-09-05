@@ -39,13 +39,14 @@ constexpr int kFlyoutPopOffsetDip = 40;
 // Win11 taskbar OmniButton uses Border.BackgroundTransition / BrushTransition
 // at ControlFasterAnimationDuration (83ms) for PointerOver fill crossfade.
 constexpr UINT kHoverBgFadeMs = 83;
-// Official WPF Fluent ToolTip DropShadowEffect (PresentationFramework.Fluent
-// Styles/ToolTip.xaml): BlurRadius=30, Opacity=0.4, ShadowDepth=0,
-// Direction=0, Color=#202020. CornerRadius=4.
-constexpr int kFlyoutShadowBlurDip = 30;
-constexpr float kFlyoutShadowOpacity = 0.4f;
-constexpr COLORREF kFlyoutShadowColor = RGB(0x20, 0x20, 0x20);
-constexpr int kFlyoutShadowPadDip = 36;
+// Win11 ThemeShadow tooltip recipe (Z=16 → Elevation=8):
+// directional only (ambient=0 at low elevation), blur=Elevation, Y=Elevation*0.5.
+// Windowed tooltip insets L,T,R,B = 4,1,4,8. CornerRadius=4.
+constexpr int kFlyoutShadowElevDip = 8;
+constexpr int kFlyoutShadowInsetL = 4;
+constexpr int kFlyoutShadowInsetT = 1;
+constexpr int kFlyoutShadowInsetR = 4;
+constexpr int kFlyoutShadowInsetB = 8;
 constexpr int kFlyoutCornerRadiusDip = 4;
 
 enum class FlyoutVis : BYTE { Hidden, FadingIn, Shown, FadingOut };
@@ -415,22 +416,26 @@ void dismiss_flyout() {
   begin_flyout_fade(0.0f);
 }
 
-// Official WPF Fluent ToolTip DropShadowEffect approximation:
-// BlurRadius=30, Opacity=0.4, ShadowDepth=0, Direction=0, Color=#202020.
+// Win11 ThemeShadow @ tooltip elevation: directional key shadow only.
+// blur = Elevation, Y offset = Elevation * 0.5, X = 0; ambient opacity = 0.
+// Light ~14% / Dark ~28% (Fluent low-elevation directional opacity).
 void paint_flyout_shadow(const RECT& content, float radius_px) {
-  const int blur = MulDiv(kFlyoutShadowBlurDip, g_dpi, 96);
-  constexpr int kSteps = 16;
+  const int blur = MulDiv(kFlyoutShadowElevDip, g_dpi, 96);
+  const int y_off =
+      MulDiv(kFlyoutShadowElevDip, g_dpi, 96) / 2;  // Elevation * 0.5
+  const float strength = g_light_theme ? 0.14f : 0.28f;
+  constexpr int kSteps = 10;
   for (int i = 1; i <= kSteps; ++i) {
     const float t = static_cast<float>(i) / static_cast<float>(kSteps);
     const int expand =
         static_cast<int>(std::lround(static_cast<float>(blur) * t));
-    const RECT rc{content.left - expand, content.top - expand,
-                  content.right + expand, content.bottom + expand};
+    const RECT rc{content.left - expand, content.top - expand + y_off,
+                  content.right + expand, content.bottom + expand + y_off};
     const float falloff = 1.0f - t;
     const float alpha =
-        kFlyoutShadowOpacity * falloff * falloff / static_cast<float>(kSteps);
+        strength * falloff * falloff / static_cast<float>(kSteps);
     text_render_fill_rounded_rect(
-        rc, radius_px + static_cast<float>(expand), kFlyoutShadowColor, alpha);
+        rc, radius_px + static_cast<float>(expand), RGB(0, 0, 0), alpha);
   }
 }
 
@@ -456,9 +461,12 @@ bool paint_flyout(HWND hwnd) {
     return false;
   }
 
-  const int shadow_pad = MulDiv(kFlyoutShadowPadDip, g_dpi, 96);
-  const int width = content_w + shadow_pad * 2;
-  const int height = content_h + shadow_pad * 2;
+  const int inset_l = MulDiv(kFlyoutShadowInsetL, g_dpi, 96);
+  const int inset_t = MulDiv(kFlyoutShadowInsetT, g_dpi, 96);
+  const int inset_r = MulDiv(kFlyoutShadowInsetR, g_dpi, 96);
+  const int inset_b = MulDiv(kFlyoutShadowInsetB, g_dpi, 96);
+  const int width = content_w + inset_l + inset_r;
+  const int height = content_h + inset_t + inset_b;
 
   HDC screen = GetDC(nullptr);
   BITMAPINFO bmi{};
@@ -485,8 +493,8 @@ bool paint_flyout(HWND hwnd) {
                            4);
 
   const RECT bounds{0, 0, width, height};
-  const RECT content{shadow_pad, shadow_pad, shadow_pad + content_w,
-                     shadow_pad + content_h};
+  const RECT content{inset_l, inset_t, inset_l + content_w,
+                     inset_t + content_h};
   const float radius =
       static_cast<float>(MulDiv(kFlyoutCornerRadiusDip, g_dpi, 96));
   const COLORREF bg =
@@ -518,22 +526,22 @@ bool paint_flyout(HWND hwnd) {
   }
   const int gap = MulDiv(8, g_dpi, 96);
   int screen_x =
-      anchor.left + (anchor.right - anchor.left - content_w) / 2 - shadow_pad;
-  int screen_y = anchor.top - gap - content_h - shadow_pad;
+      anchor.left + (anchor.right - anchor.left - content_w) / 2 - inset_l;
+  int screen_y = anchor.top - gap - content_h - inset_t;
   bool above = true;
   MONITORINFO mi{};
   mi.cbSize = sizeof(mi);
   if (GetMonitorInfoW(MonitorFromWindow(g_hwnd, MONITOR_DEFAULTTONEAREST),
                       &mi)) {
     const int margin = MulDiv(8, g_dpi, 96);
-    if (screen_x + shadow_pad < mi.rcWork.left + margin) {
-      screen_x = mi.rcWork.left + margin - shadow_pad;
+    if (screen_x + inset_l < mi.rcWork.left + margin) {
+      screen_x = mi.rcWork.left + margin - inset_l;
     }
-    if (screen_x + shadow_pad + content_w > mi.rcWork.right - margin) {
-      screen_x = mi.rcWork.right - margin - content_w - shadow_pad;
+    if (screen_x + inset_l + content_w > mi.rcWork.right - margin) {
+      screen_x = mi.rcWork.right - margin - content_w - inset_l;
     }
-    if (screen_y + shadow_pad < mi.rcWork.top + margin) {
-      screen_y = anchor.bottom + gap - shadow_pad;
+    if (screen_y + inset_t < mi.rcWork.top + margin) {
+      screen_y = anchor.bottom + gap - inset_t;
       above = false;
     }
   }
