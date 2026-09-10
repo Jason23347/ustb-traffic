@@ -6,15 +6,15 @@
 
 ## 编译
 
-本机使用 VS 2026 Build Tools。先打开 **x64 Native Tools** 环境，再 CMake：
+本机使用 VS 2026 Build Tools。先打开 **x64 Native Tools** 环境，再 CMake（Ninja 可并行编译）：
 
 ```bat
 call "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
-cmake -S . -B build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release
-cmake --build build
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
 ```
 
-也可直接运行仓库里的 `build.bat`。
+也可直接运行仓库里的 `build.bat`。默认按 CPU 核数并行；`build.bat -j4` 或 `build.bat /j4` 限定 4 路。
 
 产物：
 
