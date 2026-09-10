@@ -1181,7 +1181,9 @@ LRESULT CALLBACK host_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       return 0;
     case WM_USTB_RESHOW:
       if (g_hwnd && IsWindow(g_hwnd)) {
-        ShowWindow(g_hwnd, SW_SHOWNOACTIVATE);
+        if (!fullscreen_app_active()) {
+          ShowWindow(g_hwnd, SW_SHOWNOACTIVATE);
+        }
         g_last_x = INT_MIN;
         present();
       } else {
@@ -1307,7 +1309,14 @@ void reembed_taskbar_window() {
     create_display_window(app().instance, false);
     return;
   }
-  if (tray && GetWindow(g_hwnd, GW_OWNER) == tray && IsWindowVisible(g_hwnd)) {
+  const BOOL visible = IsWindowVisible(g_hwnd);
+  const bool owner_ok = tray && GetWindow(g_hwnd, GW_OWNER) == tray;
+  if (owner_ok && visible) {
+    return;
+  }
+  // Intentionally hidden while a fullscreen app is active. Do not Show here —
+  // the 1s embed timer used to Show then present()-Hide, causing a flash.
+  if (owner_ok && !visible && fullscreen_app_active()) {
     return;
   }
   if (g_hwnd && tray && GetWindow(g_hwnd, GW_OWNER) != tray) {
