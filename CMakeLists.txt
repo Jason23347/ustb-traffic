@@ -13,6 +13,7 @@ set(USTB_CORE
   src/parser.cpp
   src/debounce.cpp
   src/format.cpp
+  src/md5.cpp
 )
 
 add_executable(UstbTraffic WIN32
@@ -21,6 +22,7 @@ add_executable(UstbTraffic WIN32
   src/app.cpp
   src/config.cpp
   src/poller.cpp
+  src/zifuwu.cpp
   src/taskbar_wnd.cpp
   src/text_render.cpp
   src/menu.cpp
@@ -41,6 +43,7 @@ target_link_libraries(UstbTraffic PRIVATE
   user32
   gdi32
   winhttp
+  bcrypt
   shell32
   advapi32
   comctl32
@@ -63,5 +66,6 @@ target_compile_definitions(UstbTrafficTests PRIVATE
   _CRT_SECURE_NO_WARNINGS
 )
 
+target_link_libraries(UstbTrafficTests PRIVATE bcrypt)
 enable_testing()
 add_test(NAME UstbTrafficTests COMMAND UstbTrafficTests)

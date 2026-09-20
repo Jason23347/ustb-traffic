@@ -1,8 +1,10 @@
 #include "poller.h"
 
 #include "app.h"
+#include "config.h"
 #include "parser.h"
 #include "types.h"
+#include "zifuwu.h"
 
 #include <windows.h>
 #include <winhttp.h>
@@ -14,6 +16,8 @@ namespace {
 
 HANDLE g_stop = nullptr;
 std::thread g_thread;
+TrafficSource g_last_source = TrafficSource::Portal82;
+std::wstring g_last_user;
 
 double now_sec() {
   static const LARGE_INTEGER freq = [] {
@@ -44,6 +48,22 @@ std::wstring winhttp_err(DWORD code) {
   wchar_t buf[64];
   swprintf_s(buf, L"WinHTTP 错误 %u", code);
   return buf;
+}
+
+std::string wide_to_utf8(const std::wstring& s) {
+  if (s.empty()) {
+    return {};
+  }
+  const int n = WideCharToMultiByte(CP_UTF8, 0, s.data(),
+                                    static_cast<int>(s.size()), nullptr, 0,
+                                    nullptr, nullptr);
+  if (n <= 0) {
+    return {};
+  }
+  std::string out(static_cast<size_t>(n), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, s.data(), static_cast<int>(s.size()),
+                      out.data(), n, nullptr, nullptr);
+  return out;
 }
 
 bool http_get(const Config& cfg, std::string& body, std::wstring& err) {
@@ -143,6 +163,33 @@ bool http_get(const Config& cfg, std::string& body, std::wstring& err) {
   return true;
 }
 
+void maybe_reset_zifuwu(const Config& cfg) {
+  if (cfg.traffic_source != g_last_source ||
+      (cfg.traffic_source == TrafficSource::Zifuwu &&
+       cfg.username != g_last_user)) {
+    zifuwu_reset_session();
+  }
+  g_last_source = cfg.traffic_source;
+  g_last_user = cfg.username;
+  if (cfg.traffic_source != TrafficSource::Zifuwu) {
+    g_last_user.clear();
+  }
+}
+
+void apply_portal_info(PortalInfo info, DisplaySnapshot& snap) {
+  std::lock_guard<std::mutex> lock(app().mu);
+  if (!info.logged_in() || !info.has_flow) {
+    if (!info.logged_in()) {
+      snap = app().monitor.on_not_logged_in();
+    } else {
+      snap = app().monitor.on_http_failure(L"无法解析 flow");
+    }
+  } else {
+    snap = app().monitor.on_sample(now_sec(), info.flow_kb, info);
+  }
+  app().snap = snap;
+}
+
 void poller_loop() {
   while (app().running.load()) {
     const double loop_start = now_sec();
@@ -152,27 +199,39 @@ void poller_loop() {
       std::lock_guard<std::mutex> lock(app().mu);
       cfg = app().config;
     }
+    maybe_reset_zifuwu(cfg);
 
-    std::string body;
-    std::wstring err;
     DisplaySnapshot snap;
-    if (!http_get(cfg, body, err)) {
-      std::lock_guard<std::mutex> lock(app().mu);
-      snap = app().monitor.on_http_failure(err.c_str());
-      app().snap = snap;
-    } else {
-      const PortalInfo info = parse_portal_html(body);
-      std::lock_guard<std::mutex> lock(app().mu);
-      if (!info.logged_in() || !info.has_flow) {
-        if (!info.logged_in()) {
-          snap = app().monitor.on_not_logged_in();
-        } else {
-          snap = app().monitor.on_http_failure(L"无法解析 flow");
-        }
+    if (cfg.traffic_source == TrafficSource::Zifuwu) {
+      const ZifuwuFetchResult fetched = zifuwu_fetch_dashboard(cfg);
+      if (!fetched.ok) {
+        std::lock_guard<std::mutex> lock(app().mu);
+        snap = app().monitor.on_http_failure(
+            fetched.err.empty() ? L"自服务请求失败" : fetched.err.c_str());
+        app().snap = snap;
       } else {
-        snap = app().monitor.on_sample(now_sec(), info.flow_kb, info);
+        PortalInfo info = parse_zifuwu_dashboard(fetched.body);
+        if (!info.has_flow) {
+          zifuwu_reset_session();
+          std::lock_guard<std::mutex> lock(app().mu);
+          snap = app().monitor.on_http_failure(L"无法解析已用流量");
+          app().snap = snap;
+        } else {
+          // uid → tooltip「用户」(学号); nid →「姓名」
+          info.uid = wide_to_utf8(cfg.username);
+          apply_portal_info(info, snap);
+        }
       }
-      app().snap = snap;
+    } else {
+      std::string body;
+      std::wstring err;
+      if (!http_get(cfg, body, err)) {
+        std::lock_guard<std::mutex> lock(app().mu);
+        snap = app().monitor.on_http_failure(err.c_str());
+        app().snap = snap;
+      } else {
+        apply_portal_info(parse_portal_html(body), snap);
+      }
     }
 
     if (app().hwnd) {
@@ -217,6 +276,7 @@ void stop_poller() {
     CloseHandle(g_stop);
     g_stop = nullptr;
   }
+  zifuwu_reset_session();
 }
 
 }  // namespace ustb

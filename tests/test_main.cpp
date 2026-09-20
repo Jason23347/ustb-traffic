@@ -1,5 +1,6 @@
 #include "debounce.h"
 #include "format.h"
+#include "md5.h"
 #include "parser.h"
 
 #include <cmath>
@@ -51,6 +52,39 @@ int main() {
   {
     const PortalInfo info = parse_portal_html("<html>no script vars</html>");
     expect(!info.has_flow && !info.logged_in(), "missing fields");
+  }
+
+  {
+    const std::string html =
+        "<div class=\"thumbnail\">"
+        "<div class=\"caption\">"
+        "<h4>朱帅成，\n                            您好！</h4>"
+        "<p><label>防伪信息：</label></p>"
+        "</div></div>"
+        "<div class=\"row text-center\" style=\"margin-top: 15px;\">"
+        "<div class=\"col-xs-4\"><small>"
+        "<span style=\"color: #337ab7;\">总量:</span> "
+        "<strong style=\"color: #337ab7; font-size: 16px;\">122880M</strong>"
+        "</small></div>"
+        "<div class=\"col-xs-4\"><small>"
+        "<span style=\"color: #f0ad4e;\">已用:</span> "
+        "<strong style=\"color: #f0ad4e; font-size: 16px;\">141340M</strong>"
+        "</small></div>"
+        "<div class=\"col-xs-4\"><small>"
+        "<span style=\"color: #5cb85c;\">剩余:</span> "
+        "<strong style=\"color: #5cb85c; font-size: 16px;\">0M</strong>"
+        "</small></div></div>";
+    const PortalInfo info = parse_zifuwu_dashboard(html);
+    expect(info.has_flow, "zifuwu has_flow");
+    expect(info.logged_in(), "zifuwu logged in");
+    expect(info.flow_kb == 141340ull * 1024ull, "zifuwu used MB to KB");
+    expect(info.nid == "朱帅成", "zifuwu name from h4");
+  }
+
+  {
+    expect(md5_hex("password") == "5f4dcc3b5aa765d61d8327deb882cf99",
+           "md5 password");
+    expect(md5_hex("") == "d41d8cd98f00b204e9800998ecf8427e", "md5 empty");
   }
 
   {

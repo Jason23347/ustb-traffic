@@ -5,6 +5,7 @@
 #include "config.h"
 #include "taskbar_wnd.h"
 #include "types.h"
+#include "zifuwu.h"
 
 #include <windows.h>
 
@@ -16,13 +17,15 @@ namespace {
 
 constexpr wchar_t kOptClass[] = L"UstbTrafficOptions";
 constexpr int kOptClientW = 456;
-constexpr int kOptClientH = 396;
-constexpr int IDC_HOST = 2001;
+constexpr int kOptClientH = 476;
+constexpr int IDC_SOURCE = 2001;
 constexpr int IDC_INTERVAL = 2002;
 constexpr int IDC_QUOTA = 2003;
 constexpr int IDC_PAD = 2004;
 constexpr int IDC_GAP = 2005;
 constexpr int IDC_FONT = 2006;
+constexpr int IDC_USER = 2007;
+constexpr int IDC_PASS = 2008;
 constexpr int IDC_HINT = 2010;
 constexpr int IDC_UNIT_MS = 2011;
 constexpr int IDC_UNIT_GB = 2012;
@@ -59,57 +62,46 @@ std::wstring get_text(HWND hwnd) {
   return s;
 }
 
-void strip_host_path(std::wstring& host, unsigned& port, std::wstring& path) {
-  while (!host.empty() && (host.front() == L' ' || host.back() == L' ')) {
-    if (host.front() == L' ') {
-      host.erase(host.begin());
-    } else {
-      host.pop_back();
-    }
+TrafficSource selected_source(HWND hwnd) {
+  const int sel =
+      static_cast<int>(SendMessageW(GetDlgItem(hwnd, IDC_SOURCE), CB_GETCURSEL,
+                                    0, 0));
+  if (sel == 1) {
+    return TrafficSource::Portal66;
   }
-  const std::wstring http = L"http://";
-  const std::wstring https = L"https://";
-  if (host.rfind(http, 0) == 0) {
-    host.erase(0, http.size());
-  } else if (host.rfind(https, 0) == 0) {
-    host.erase(0, https.size());
+  if (sel == 2) {
+    return TrafficSource::Zifuwu;
   }
-  path = L"/";
-  const size_t slash = host.find(L'/');
-  if (slash != std::wstring::npos) {
-    std::wstring rest = host.substr(slash);
-    host.resize(slash);
-    if (!rest.empty()) {
-      path = rest;
-    }
-  }
-  const size_t colon = host.rfind(L':');
-  if (colon != std::wstring::npos && colon + 1 < host.size()) {
-    const unsigned p = static_cast<unsigned>(wcstoul(host.c_str() + colon + 1,
-                                                     nullptr, 10));
-    if (p >= 1 && p <= 65535) {
-      port = p;
-    }
-    host.resize(colon);
-  }
+  return TrafficSource::Portal82;
+}
+
+void sync_cred_enabled(HWND hwnd) {
+  const bool need = selected_source(hwnd) == TrafficSource::Zifuwu;
+  EnableWindow(GetDlgItem(hwnd, IDC_USER), need ? TRUE : FALSE);
+  EnableWindow(GetDlgItem(hwnd, IDC_PASS), need ? TRUE : FALSE);
 }
 
 LRESULT CALLBACK options_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   switch (msg) {
     case WM_COMMAND:
       switch (LOWORD(wp)) {
+        case IDC_SOURCE:
+          if (HIWORD(wp) == CBN_SELCHANGE) {
+            sync_cred_enabled(hwnd);
+          }
+          break;
         case IDC_OK: {
-          std::wstring host = get_text(GetDlgItem(hwnd, IDC_HOST));
+          const TrafficSource source = selected_source(hwnd);
+          std::wstring user = get_text(GetDlgItem(hwnd, IDC_USER));
+          std::wstring pass = get_text(GetDlgItem(hwnd, IDC_PASS));
           std::wstring interval_s = get_text(GetDlgItem(hwnd, IDC_INTERVAL));
           std::wstring quota_s = get_text(GetDlgItem(hwnd, IDC_QUOTA));
           std::wstring pad_s = get_text(GetDlgItem(hwnd, IDC_PAD));
           std::wstring gap_s = get_text(GetDlgItem(hwnd, IDC_GAP));
           std::wstring font_s = get_text(GetDlgItem(hwnd, IDC_FONT));
-          unsigned port = 80;
-          std::wstring path = L"/";
-          strip_host_path(host, port, path);
-          if (host.empty()) {
-            MessageBoxW(hwnd, L"请填写登录页地址。", L"UstbTraffic",
+          if (source == TrafficSource::Zifuwu &&
+              (user.empty() || pass.empty())) {
+            MessageBoxW(hwnd, L"自服务流量源请填写学号和密码。", L"UstbTraffic",
                         MB_OK | MB_ICONWARNING);
             return 0;
           }
@@ -117,8 +109,10 @@ LRESULT CALLBACK options_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
               wcstoul(interval_s.c_str(), nullptr, 10));
           unsigned quota =
               static_cast<unsigned>(wcstoul(quota_s.c_str(), nullptr, 10));
-          unsigned pad = static_cast<unsigned>(wcstoul(pad_s.c_str(), nullptr, 10));
-          unsigned gap = static_cast<unsigned>(wcstoul(gap_s.c_str(), nullptr, 10));
+          unsigned pad =
+              static_cast<unsigned>(wcstoul(pad_s.c_str(), nullptr, 10));
+          unsigned gap =
+              static_cast<unsigned>(wcstoul(gap_s.c_str(), nullptr, 10));
           unsigned font_dip =
               static_cast<unsigned>(wcstoul(font_s.c_str(), nullptr, 10));
           interval = std::clamp(interval, kMinIntervalMs, 60000u);
@@ -132,15 +126,23 @@ LRESULT CALLBACK options_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
           Config cfg;
           {
             std::lock_guard<std::mutex> lock(app().mu);
-            app().config.host = std::move(host);
-            app().config.port = port;
-            app().config.path = std::move(path);
+            const bool cred_changed =
+                app().config.username != user ||
+                app().config.password != pass ||
+                app().config.traffic_source != source;
+            app().config.traffic_source = source;
+            apply_traffic_source(app().config);
+            app().config.username = std::move(user);
+            app().config.password = std::move(pass);
             app().config.interval_ms = interval;
             app().config.quota_gb = quota;
             app().config.taskbar_pad_px = pad;
             app().config.taskbar_gap_px = gap;
             app().config.taskbar_font_dip = font_dip;
             cfg = app().config;
+            if (cred_changed) {
+              zifuwu_reset_session();
+            }
           }
           save_config(cfg);
           invalidate_taskbar_layout();
@@ -218,6 +220,17 @@ HWND add_edit(HWND parent, HINSTANCE inst, int id, const wchar_t* text, int x,
                            inst, nullptr);
   apply_font(e);
   return e;
+}
+
+HWND add_combo(HWND parent, HINSTANCE inst, int id, int x, int y, int w,
+               int h) {
+  HWND c = CreateWindowExW(
+      0, L"COMBOBOX", L"",
+      WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, x, y, w,
+      h + dpx(120), parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
+      inst, nullptr);
+  apply_font(c);
+  return c;
 }
 
 HWND add_btn(HWND parent, HINSTANCE inst, int id, const wchar_t* text, int x,
@@ -329,59 +342,81 @@ void show_options_dialog(HWND parent) {
   const int label_w = dpx(72);
   const int edit_x = dpx(108);
   const int row_h = dpx(28);
-  const int host_w = dpx(kOptClientW) - edit_x - dpx(24);
+  const int field_w = dpx(kOptClientW) - edit_x - dpx(24);
   const int num_w = dpx(140);
   const int unit_x = edit_x + num_w + dpx(10);
 
-  add_label(g_opt, app().instance, 0, L"登录页", label_x, dpx(22), label_w,
+  add_label(g_opt, app().instance, 0, L"流量源", label_x, dpx(22), label_w,
             row_h);
-  add_edit(g_opt, app().instance, IDC_HOST, cfg.host.c_str(), edit_x, dpx(22),
-           host_w, row_h, 0);
+  HWND source = add_combo(g_opt, app().instance, IDC_SOURCE, edit_x, dpx(22),
+                          field_w, row_h);
+  SendMessageW(source, CB_ADDSTRING, 0,
+               reinterpret_cast<LPARAM>(traffic_source_label(TrafficSource::Portal82)));
+  SendMessageW(source, CB_ADDSTRING, 0,
+               reinterpret_cast<LPARAM>(traffic_source_label(TrafficSource::Portal66)));
+  SendMessageW(source, CB_ADDSTRING, 0,
+               reinterpret_cast<LPARAM>(traffic_source_label(TrafficSource::Zifuwu)));
+  int sel = 0;
+  if (cfg.traffic_source == TrafficSource::Portal66) {
+    sel = 1;
+  } else if (cfg.traffic_source == TrafficSource::Zifuwu) {
+    sel = 2;
+  }
+  SendMessageW(source, CB_SETCURSEL, sel, 0);
+
+  add_label(g_opt, app().instance, 0, L"学号", label_x, dpx(62), label_w, row_h);
+  add_edit(g_opt, app().instance, IDC_USER, cfg.username.c_str(), edit_x,
+           dpx(62), field_w, row_h, 0);
+  add_label(g_opt, app().instance, 0, L"密码", label_x, dpx(102), label_w,
+            row_h);
+  add_edit(g_opt, app().instance, IDC_PASS, cfg.password.c_str(), edit_x,
+           dpx(102), field_w, row_h, ES_PASSWORD);
+  sync_cred_enabled(g_opt);
 
   wchar_t num[32];
   swprintf_s(num, L"%u", cfg.interval_ms);
-  add_label(g_opt, app().instance, 0, L"轮询间隔", label_x, dpx(62), label_w,
+  add_label(g_opt, app().instance, 0, L"轮询间隔", label_x, dpx(142), label_w,
             row_h);
-  add_edit(g_opt, app().instance, IDC_INTERVAL, num, edit_x, dpx(62), num_w,
+  add_edit(g_opt, app().instance, IDC_INTERVAL, num, edit_x, dpx(142), num_w,
            row_h, ES_NUMBER);
-  add_label(g_opt, app().instance, IDC_UNIT_MS, L"ms", unit_x, dpx(62), dpx(36),
+  add_label(g_opt, app().instance, IDC_UNIT_MS, L"ms", unit_x, dpx(142), dpx(36),
             row_h);
 
   swprintf_s(num, L"%u", cfg.quota_gb);
-  add_label(g_opt, app().instance, 0, L"免费额度", label_x, dpx(102), label_w,
+  add_label(g_opt, app().instance, 0, L"免费额度", label_x, dpx(182), label_w,
             row_h);
-  add_edit(g_opt, app().instance, IDC_QUOTA, num, edit_x, dpx(102), num_w, row_h,
+  add_edit(g_opt, app().instance, IDC_QUOTA, num, edit_x, dpx(182), num_w, row_h,
            ES_NUMBER);
-  add_label(g_opt, app().instance, IDC_UNIT_GB, L"GB", unit_x, dpx(102), dpx(36),
+  add_label(g_opt, app().instance, IDC_UNIT_GB, L"GB", unit_x, dpx(182), dpx(36),
             row_h);
 
   swprintf_s(num, L"%u", cfg.taskbar_pad_px);
-  add_label(g_opt, app().instance, 0, L"边距", label_x, dpx(142), label_w,
+  add_label(g_opt, app().instance, 0, L"边距", label_x, dpx(222), label_w,
             row_h);
-  add_edit(g_opt, app().instance, IDC_PAD, num, edit_x, dpx(142), num_w, row_h,
+  add_edit(g_opt, app().instance, IDC_PAD, num, edit_x, dpx(222), num_w, row_h,
            ES_NUMBER);
-  add_label(g_opt, app().instance, IDC_UNIT_PX, L"px", unit_x, dpx(142), dpx(36),
+  add_label(g_opt, app().instance, IDC_UNIT_PX, L"px", unit_x, dpx(222), dpx(36),
             row_h);
 
   swprintf_s(num, L"%u", cfg.taskbar_gap_px);
-  add_label(g_opt, app().instance, 0, L"列间距", label_x, dpx(182), label_w,
+  add_label(g_opt, app().instance, 0, L"列间距", label_x, dpx(262), label_w,
             row_h);
-  add_edit(g_opt, app().instance, IDC_GAP, num, edit_x, dpx(182), num_w, row_h,
+  add_edit(g_opt, app().instance, IDC_GAP, num, edit_x, dpx(262), num_w, row_h,
            ES_NUMBER);
-  add_label(g_opt, app().instance, IDC_UNIT_GAP, L"px", unit_x, dpx(182), dpx(36),
+  add_label(g_opt, app().instance, IDC_UNIT_GAP, L"px", unit_x, dpx(262), dpx(36),
             row_h);
 
   swprintf_s(num, L"%u", cfg.taskbar_font_dip);
-  add_label(g_opt, app().instance, 0, L"字体大小", label_x, dpx(222), label_w,
+  add_label(g_opt, app().instance, 0, L"字体大小", label_x, dpx(302), label_w,
             row_h);
-  add_edit(g_opt, app().instance, IDC_FONT, num, edit_x, dpx(222), num_w, row_h,
+  add_edit(g_opt, app().instance, IDC_FONT, num, edit_x, dpx(302), num_w, row_h,
            ES_NUMBER);
-  add_label(g_opt, app().instance, IDC_UNIT_FONT, L"DIP", unit_x, dpx(222),
+  add_label(g_opt, app().instance, IDC_UNIT_FONT, L"DIP", unit_x, dpx(302),
             dpx(48), row_h);
 
   add_label(g_opt, app().instance, IDC_HINT,
-            L"地址例如 202.204.48.82；字体 0 表示自动跟随系统", label_x, dpx(268),
-            dpx(kOptClientW) - dpx(48), dpx(22));
+            L"自服务需学号密码（明文存本地）；字体 0 表示自动跟随系统", label_x,
+            dpx(348), dpx(kOptClientW) - dpx(48), dpx(22));
 
   const int btn_w = dpx(88);
   const int btn_h = dpx(32);

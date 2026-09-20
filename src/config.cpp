@@ -21,7 +21,107 @@ unsigned parse_u(const wchar_t* s, unsigned fallback) {
   return static_cast<unsigned>(v);
 }
 
+bool contains_ci(const std::wstring& hay, const wchar_t* needle) {
+  if (needle == nullptr || needle[0] == L'\0') {
+    return false;
+  }
+  for (size_t i = 0; i < hay.size(); ++i) {
+    size_t j = 0;
+    while (needle[j] != L'\0') {
+      const wchar_t a = hay[i + j];
+      const wchar_t b = needle[j];
+      if (i + j >= hay.size()) {
+        break;
+      }
+      const wchar_t al =
+          (a >= L'A' && a <= L'Z') ? static_cast<wchar_t>(a - L'A' + L'a') : a;
+      const wchar_t bl =
+          (b >= L'A' && b <= L'Z') ? static_cast<wchar_t>(b - L'A' + L'a') : b;
+      if (al != bl) {
+        break;
+      }
+      ++j;
+    }
+    if (needle[j] == L'\0') {
+      return true;
+    }
+  }
+  return false;
+}
+
 }  // namespace
+
+void apply_traffic_source(Config& cfg) {
+  switch (cfg.traffic_source) {
+    case TrafficSource::Portal66:
+      cfg.host = L"202.204.48.66";
+      cfg.port = 80;
+      cfg.path = L"/";
+      cfg.use_https = false;
+      break;
+    case TrafficSource::Zifuwu:
+      cfg.host = L"zifuwu.ustb.edu.cn";
+      cfg.port = 443;
+      cfg.path = L"/Self/dashboard";
+      cfg.use_https = true;
+      break;
+    case TrafficSource::Portal82:
+    default:
+      cfg.traffic_source = TrafficSource::Portal82;
+      cfg.host = L"202.204.48.82";
+      cfg.port = 80;
+      cfg.path = L"/";
+      cfg.use_https = false;
+      break;
+  }
+}
+
+const wchar_t* traffic_source_key(TrafficSource src) {
+  switch (src) {
+    case TrafficSource::Portal66:
+      return L"portal66";
+    case TrafficSource::Zifuwu:
+      return L"zifuwu";
+    case TrafficSource::Portal82:
+    default:
+      return L"portal82";
+  }
+}
+
+const wchar_t* traffic_source_label(TrafficSource src) {
+  switch (src) {
+    case TrafficSource::Portal66:
+      return L"202.204.48.66";
+    case TrafficSource::Zifuwu:
+      return L"https://zifuwu.ustb.edu.cn";
+    case TrafficSource::Portal82:
+    default:
+      return L"202.204.48.82";
+  }
+}
+
+TrafficSource traffic_source_from_key(const wchar_t* key) {
+  if (key == nullptr) {
+    return TrafficSource::Portal82;
+  }
+  if (_wcsicmp(key, L"portal66") == 0) {
+    return TrafficSource::Portal66;
+  }
+  if (_wcsicmp(key, L"zifuwu") == 0) {
+    return TrafficSource::Zifuwu;
+  }
+  return TrafficSource::Portal82;
+}
+
+TrafficSource traffic_source_from_legacy_host(const std::wstring& host) {
+  if (contains_ci(host, L"zifuwu")) {
+    return TrafficSource::Zifuwu;
+  }
+  if (contains_ci(host, L"202.204.48.66")) {
+    return TrafficSource::Portal66;
+  }
+  return TrafficSource::Portal82;
+}
 
 std::wstring config_dir() {
   wchar_t base[MAX_PATH]{};
@@ -39,22 +139,26 @@ std::wstring config_path() { return config_dir() + L"\\config.ini"; }
 Config load_config() {
   Config cfg;
   const std::wstring path = config_path();
-  wchar_t buf[256]{};
+  wchar_t buf[512]{};
 
-  GetPrivateProfileStringW(L"general", L"host", cfg.host.c_str(), buf,
+  GetPrivateProfileStringW(L"general", L"traffic_source", L"", buf,
                            static_cast<DWORD>(std::size(buf)), path.c_str());
-  cfg.host = buf;
-
-  GetPrivateProfileStringW(L"general", L"path", cfg.path.c_str(), buf,
-                           static_cast<DWORD>(std::size(buf)), path.c_str());
-  cfg.path = buf;
-  if (cfg.path.empty() || cfg.path[0] != L'/') {
-    cfg.path = L"/";
+  if (buf[0] != L'\0') {
+    cfg.traffic_source = traffic_source_from_key(buf);
+  } else {
+    GetPrivateProfileStringW(L"general", L"host", cfg.host.c_str(), buf,
+                             static_cast<DWORD>(std::size(buf)), path.c_str());
+    cfg.traffic_source = traffic_source_from_legacy_host(buf);
   }
+  apply_traffic_source(cfg);
 
-  GetPrivateProfileStringW(L"general", L"port", L"80", buf,
+  GetPrivateProfileStringW(L"general", L"username", L"", buf,
                            static_cast<DWORD>(std::size(buf)), path.c_str());
-  cfg.port = static_cast<unsigned>(std::clamp(parse_u(buf, 80), 1u, 65535u));
+  cfg.username = buf;
+
+  GetPrivateProfileStringW(L"general", L"password", L"", buf,
+                           static_cast<DWORD>(std::size(buf)), path.c_str());
+  cfg.password = buf;
 
   GetPrivateProfileStringW(L"general", L"interval_ms", L"1000", buf,
                            static_cast<DWORD>(std::size(buf)), path.c_str());
@@ -94,15 +198,23 @@ Config load_config() {
 
   GetPrivateProfileStringW(L"general", L"taskbar_side", L"0", buf,
                            static_cast<DWORD>(std::size(buf)), path.c_str());
-  cfg.taskbar_side = parse_u(buf, 0) == 1 ? TaskbarSide::Left : TaskbarSide::Right;
+  cfg.taskbar_side =
+      parse_u(buf, 0) == 1 ? TaskbarSide::Left : TaskbarSide::Right;
   return cfg;
 }
 
 void save_config(const Config& cfg) {
   const std::wstring path = config_path();
+  WritePrivateProfileStringW(L"general", L"traffic_source",
+                             traffic_source_key(cfg.traffic_source),
+                             path.c_str());
   WritePrivateProfileStringW(L"general", L"host", cfg.host.c_str(),
                              path.c_str());
   WritePrivateProfileStringW(L"general", L"path", cfg.path.c_str(),
+                             path.c_str());
+  WritePrivateProfileStringW(L"general", L"username", cfg.username.c_str(),
+                             path.c_str());
+  WritePrivateProfileStringW(L"general", L"password", cfg.password.c_str(),
                              path.c_str());
 
   wchar_t num[32];

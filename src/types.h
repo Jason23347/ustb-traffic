@@ -57,6 +57,7 @@ constexpr double kMinSampleDt = 0.2;
 constexpr double kMaxSampleDt = 15.0;
 constexpr int kFailHoldLimit = 3;
 constexpr int kHttpTimeoutMs = 200;
+constexpr int kZifuwuHttpTimeoutMs = 8000;
 constexpr int kBackoffCapMs = 30000;
 constexpr unsigned kDefaultQuotaGb = 120;
 constexpr unsigned kDefaultIntervalMs = 1000;

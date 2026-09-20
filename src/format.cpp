@@ -10,20 +10,24 @@ std::wstring gbk_to_wide(const std::string& s) {
   if (s.empty()) {
     return {};
   }
-  auto convert = [&](UINT cp) -> std::wstring {
-    const int n = MultiByteToWideChar(cp, 0, s.data(), static_cast<int>(s.size()),
-                                      nullptr, 0);
+  auto convert = [&](UINT cp, DWORD flags) -> std::wstring {
+    const int n = MultiByteToWideChar(cp, flags, s.data(),
+                                      static_cast<int>(s.size()), nullptr, 0);
     if (n <= 0) {
       return {};
     }
     std::wstring out(static_cast<size_t>(n), L'\0');
-    MultiByteToWideChar(cp, 0, s.data(), static_cast<int>(s.size()), out.data(),
-                        n);
+    MultiByteToWideChar(cp, flags, s.data(), static_cast<int>(s.size()),
+                        out.data(), n);
     return out;
   };
-  std::wstring w = convert(936);
+  // Prefer UTF-8 (zifuwu dashboard); fall back to GBK (portal pages).
+  std::wstring w = convert(CP_UTF8, MB_ERR_INVALID_CHARS);
   if (w.empty()) {
-    w = convert(CP_ACP);
+    w = convert(936, 0);
+  }
+  if (w.empty()) {
+    w = convert(CP_ACP, 0);
   }
   return w;
 }

@@ -11,5 +11,6 @@ std::optional<uint64_t> extract_u64_field(const std::string& html, const char* k
 std::optional<std::string> extract_quoted_field(const std::string& html,
                                                 const char* key);
 PortalInfo parse_portal_html(const std::string& html);
+PortalInfo parse_zifuwu_dashboard(const std::string& html);
 
 }  // namespace ustb
