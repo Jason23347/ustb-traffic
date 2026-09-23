@@ -65,6 +65,13 @@ void apply_traffic_source(Config& cfg) {
       cfg.path = L"/Self/dashboard";
       cfg.use_https = true;
       break;
+    case TrafficSource::Hybrid:
+      // Identity from portal 48.82; usage/fee via zifuwu fetch path.
+      cfg.host = L"202.204.48.82";
+      cfg.port = 80;
+      cfg.path = L"/";
+      cfg.use_https = false;
+      break;
     case TrafficSource::Portal82:
     default:
       cfg.traffic_source = TrafficSource::Portal82;
@@ -82,6 +89,8 @@ const wchar_t* traffic_source_key(TrafficSource src) {
       return L"portal66";
     case TrafficSource::Zifuwu:
       return L"zifuwu";
+    case TrafficSource::Hybrid:
+      return L"hybrid";
     case TrafficSource::Portal82:
     default:
       return L"portal82";
@@ -94,6 +103,8 @@ const wchar_t* traffic_source_label(TrafficSource src) {
       return L"202.204.48.66";
     case TrafficSource::Zifuwu:
       return L"https://zifuwu.ustb.edu.cn";
+    case TrafficSource::Hybrid:
+      return L"混合（登录页身份+自服务用量）";
     case TrafficSource::Portal82:
     default:
       return L"202.204.48.82";
@@ -110,6 +121,9 @@ TrafficSource traffic_source_from_key(const wchar_t* key) {
   if (_wcsicmp(key, L"zifuwu") == 0) {
     return TrafficSource::Zifuwu;
   }
+  if (_wcsicmp(key, L"hybrid") == 0) {
+    return TrafficSource::Hybrid;
+  }
   return TrafficSource::Portal82;
 }
 
@@ -121,6 +135,37 @@ TrafficSource traffic_source_from_legacy_host(const std::wstring& host) {
     return TrafficSource::Portal66;
   }
   return TrafficSource::Portal82;
+}
+
+const wchar_t* speed_source_key(SpeedSource src) {
+  switch (src) {
+    case SpeedSource::Portal66:
+      return L"portal66";
+    case SpeedSource::Portal82:
+    default:
+      return L"portal82";
+  }
+}
+
+const wchar_t* speed_source_label(SpeedSource src) {
+  switch (src) {
+    case SpeedSource::Portal66:
+      return L"202.204.48.66";
+    case SpeedSource::Portal82:
+    default:
+      return L"202.204.48.82";
+  }
+}
+
+SpeedSource speed_source_from_key(const wchar_t* key) {
+  if (key != nullptr && _wcsicmp(key, L"portal66") == 0) {
+    return SpeedSource::Portal66;
+  }
+  return SpeedSource::Portal82;
+}
+
+bool traffic_source_needs_zifuwu_cred(TrafficSource src) {
+  return src == TrafficSource::Zifuwu || src == TrafficSource::Hybrid;
 }
 
 std::wstring config_dir() {
@@ -151,6 +196,10 @@ Config load_config() {
     cfg.traffic_source = traffic_source_from_legacy_host(buf);
   }
   apply_traffic_source(cfg);
+
+  GetPrivateProfileStringW(L"general", L"speed_source", L"portal82", buf,
+                           static_cast<DWORD>(std::size(buf)), path.c_str());
+  cfg.speed_source = speed_source_from_key(buf);
 
   GetPrivateProfileStringW(L"general", L"username", L"", buf,
                            static_cast<DWORD>(std::size(buf)), path.c_str());
@@ -208,6 +257,8 @@ void save_config(const Config& cfg) {
   WritePrivateProfileStringW(L"general", L"traffic_source",
                              traffic_source_key(cfg.traffic_source),
                              path.c_str());
+  WritePrivateProfileStringW(L"general", L"speed_source",
+                             speed_source_key(cfg.speed_source), path.c_str());
   WritePrivateProfileStringW(L"general", L"host", cfg.host.c_str(),
                              path.c_str());
   WritePrivateProfileStringW(L"general", L"path", cfg.path.c_str(),

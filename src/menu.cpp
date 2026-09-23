@@ -17,7 +17,7 @@ namespace {
 
 constexpr wchar_t kOptClass[] = L"UstbTrafficOptions";
 constexpr int kOptClientW = 456;
-constexpr int kOptClientH = 476;
+constexpr int kOptClientH = 516;
 constexpr int IDC_SOURCE = 2001;
 constexpr int IDC_INTERVAL = 2002;
 constexpr int IDC_QUOTA = 2003;
@@ -26,6 +26,7 @@ constexpr int IDC_GAP = 2005;
 constexpr int IDC_FONT = 2006;
 constexpr int IDC_USER = 2007;
 constexpr int IDC_PASS = 2008;
+constexpr int IDC_SPEED = 2009;
 constexpr int IDC_HINT = 2010;
 constexpr int IDC_UNIT_MS = 2011;
 constexpr int IDC_UNIT_GB = 2012;
@@ -72,13 +73,29 @@ TrafficSource selected_source(HWND hwnd) {
   if (sel == 2) {
     return TrafficSource::Zifuwu;
   }
+  if (sel == 3) {
+    return TrafficSource::Hybrid;
+  }
   return TrafficSource::Portal82;
 }
 
-void sync_cred_enabled(HWND hwnd) {
-  const bool need = selected_source(hwnd) == TrafficSource::Zifuwu;
-  EnableWindow(GetDlgItem(hwnd, IDC_USER), need ? TRUE : FALSE);
-  EnableWindow(GetDlgItem(hwnd, IDC_PASS), need ? TRUE : FALSE);
+SpeedSource selected_speed_source(HWND hwnd) {
+  const int sel =
+      static_cast<int>(SendMessageW(GetDlgItem(hwnd, IDC_SPEED), CB_GETCURSEL,
+                                    0, 0));
+  if (sel == 1) {
+    return SpeedSource::Portal66;
+  }
+  return SpeedSource::Portal82;
+}
+
+void sync_source_dependent(HWND hwnd) {
+  const TrafficSource src = selected_source(hwnd);
+  const bool need_cred = traffic_source_needs_zifuwu_cred(src);
+  const bool need_speed = src == TrafficSource::Hybrid;
+  EnableWindow(GetDlgItem(hwnd, IDC_USER), need_cred ? TRUE : FALSE);
+  EnableWindow(GetDlgItem(hwnd, IDC_PASS), need_cred ? TRUE : FALSE);
+  EnableWindow(GetDlgItem(hwnd, IDC_SPEED), need_speed ? TRUE : FALSE);
 }
 
 LRESULT CALLBACK options_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -87,11 +104,12 @@ LRESULT CALLBACK options_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       switch (LOWORD(wp)) {
         case IDC_SOURCE:
           if (HIWORD(wp) == CBN_SELCHANGE) {
-            sync_cred_enabled(hwnd);
+            sync_source_dependent(hwnd);
           }
           break;
         case IDC_OK: {
           const TrafficSource source = selected_source(hwnd);
+          const SpeedSource speed = selected_speed_source(hwnd);
           std::wstring user = get_text(GetDlgItem(hwnd, IDC_USER));
           std::wstring pass = get_text(GetDlgItem(hwnd, IDC_PASS));
           std::wstring interval_s = get_text(GetDlgItem(hwnd, IDC_INTERVAL));
@@ -99,10 +117,10 @@ LRESULT CALLBACK options_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
           std::wstring pad_s = get_text(GetDlgItem(hwnd, IDC_PAD));
           std::wstring gap_s = get_text(GetDlgItem(hwnd, IDC_GAP));
           std::wstring font_s = get_text(GetDlgItem(hwnd, IDC_FONT));
-          if (source == TrafficSource::Zifuwu &&
+          if (traffic_source_needs_zifuwu_cred(source) &&
               (user.empty() || pass.empty())) {
-            MessageBoxW(hwnd, L"自服务流量源请填写学号和密码。", L"UstbTraffic",
-                        MB_OK | MB_ICONWARNING);
+            MessageBoxW(hwnd, L"自服务/混合模式请填写学号和密码。",
+                        L"UstbTraffic", MB_OK | MB_ICONWARNING);
             return 0;
           }
           unsigned interval = static_cast<unsigned>(
@@ -131,6 +149,7 @@ LRESULT CALLBACK options_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 app().config.password != pass ||
                 app().config.traffic_source != source;
             app().config.traffic_source = source;
+            app().config.speed_source = speed;
             apply_traffic_source(app().config);
             app().config.username = std::move(user);
             app().config.password = std::move(pass);
@@ -356,11 +375,15 @@ void show_options_dialog(HWND parent) {
                reinterpret_cast<LPARAM>(traffic_source_label(TrafficSource::Portal66)));
   SendMessageW(source, CB_ADDSTRING, 0,
                reinterpret_cast<LPARAM>(traffic_source_label(TrafficSource::Zifuwu)));
+  SendMessageW(source, CB_ADDSTRING, 0,
+               reinterpret_cast<LPARAM>(traffic_source_label(TrafficSource::Hybrid)));
   int sel = 0;
   if (cfg.traffic_source == TrafficSource::Portal66) {
     sel = 1;
   } else if (cfg.traffic_source == TrafficSource::Zifuwu) {
     sel = 2;
+  } else if (cfg.traffic_source == TrafficSource::Hybrid) {
+    sel = 3;
   }
   SendMessageW(source, CB_SETCURSEL, sel, 0);
 
@@ -371,52 +394,64 @@ void show_options_dialog(HWND parent) {
             row_h);
   add_edit(g_opt, app().instance, IDC_PASS, cfg.password.c_str(), edit_x,
            dpx(102), field_w, row_h, ES_PASSWORD);
-  sync_cred_enabled(g_opt);
+
+  add_label(g_opt, app().instance, 0, L"速率源", label_x, dpx(142), label_w,
+            row_h);
+  HWND speed = add_combo(g_opt, app().instance, IDC_SPEED, edit_x, dpx(142),
+                         field_w, row_h);
+  SendMessageW(speed, CB_ADDSTRING, 0,
+               reinterpret_cast<LPARAM>(speed_source_label(SpeedSource::Portal82)));
+  SendMessageW(speed, CB_ADDSTRING, 0,
+               reinterpret_cast<LPARAM>(speed_source_label(SpeedSource::Portal66)));
+  SendMessageW(speed, CB_SETCURSEL,
+               cfg.speed_source == SpeedSource::Portal66 ? 1 : 0, 0);
+
+  sync_source_dependent(g_opt);
 
   wchar_t num[32];
   swprintf_s(num, L"%u", cfg.interval_ms);
-  add_label(g_opt, app().instance, 0, L"轮询间隔", label_x, dpx(142), label_w,
+  add_label(g_opt, app().instance, 0, L"轮询间隔", label_x, dpx(182), label_w,
             row_h);
-  add_edit(g_opt, app().instance, IDC_INTERVAL, num, edit_x, dpx(142), num_w,
+  add_edit(g_opt, app().instance, IDC_INTERVAL, num, edit_x, dpx(182), num_w,
            row_h, ES_NUMBER);
-  add_label(g_opt, app().instance, IDC_UNIT_MS, L"ms", unit_x, dpx(142), dpx(36),
+  add_label(g_opt, app().instance, IDC_UNIT_MS, L"ms", unit_x, dpx(182), dpx(36),
             row_h);
 
   swprintf_s(num, L"%u", cfg.quota_gb);
-  add_label(g_opt, app().instance, 0, L"免费额度", label_x, dpx(182), label_w,
+  add_label(g_opt, app().instance, 0, L"免费额度", label_x, dpx(222), label_w,
             row_h);
-  add_edit(g_opt, app().instance, IDC_QUOTA, num, edit_x, dpx(182), num_w, row_h,
+  add_edit(g_opt, app().instance, IDC_QUOTA, num, edit_x, dpx(222), num_w, row_h,
            ES_NUMBER);
-  add_label(g_opt, app().instance, IDC_UNIT_GB, L"GB", unit_x, dpx(182), dpx(36),
+  add_label(g_opt, app().instance, IDC_UNIT_GB, L"GB", unit_x, dpx(222), dpx(36),
             row_h);
 
   swprintf_s(num, L"%u", cfg.taskbar_pad_px);
-  add_label(g_opt, app().instance, 0, L"边距", label_x, dpx(222), label_w,
+  add_label(g_opt, app().instance, 0, L"边距", label_x, dpx(262), label_w,
             row_h);
-  add_edit(g_opt, app().instance, IDC_PAD, num, edit_x, dpx(222), num_w, row_h,
+  add_edit(g_opt, app().instance, IDC_PAD, num, edit_x, dpx(262), num_w, row_h,
            ES_NUMBER);
-  add_label(g_opt, app().instance, IDC_UNIT_PX, L"px", unit_x, dpx(222), dpx(36),
+  add_label(g_opt, app().instance, IDC_UNIT_PX, L"px", unit_x, dpx(262), dpx(36),
             row_h);
 
   swprintf_s(num, L"%u", cfg.taskbar_gap_px);
-  add_label(g_opt, app().instance, 0, L"列间距", label_x, dpx(262), label_w,
+  add_label(g_opt, app().instance, 0, L"列间距", label_x, dpx(302), label_w,
             row_h);
-  add_edit(g_opt, app().instance, IDC_GAP, num, edit_x, dpx(262), num_w, row_h,
+  add_edit(g_opt, app().instance, IDC_GAP, num, edit_x, dpx(302), num_w, row_h,
            ES_NUMBER);
-  add_label(g_opt, app().instance, IDC_UNIT_GAP, L"px", unit_x, dpx(262), dpx(36),
+  add_label(g_opt, app().instance, IDC_UNIT_GAP, L"px", unit_x, dpx(302), dpx(36),
             row_h);
 
   swprintf_s(num, L"%u", cfg.taskbar_font_dip);
-  add_label(g_opt, app().instance, 0, L"字体大小", label_x, dpx(302), label_w,
+  add_label(g_opt, app().instance, 0, L"字体大小", label_x, dpx(342), label_w,
             row_h);
-  add_edit(g_opt, app().instance, IDC_FONT, num, edit_x, dpx(302), num_w, row_h,
+  add_edit(g_opt, app().instance, IDC_FONT, num, edit_x, dpx(342), num_w, row_h,
            ES_NUMBER);
-  add_label(g_opt, app().instance, IDC_UNIT_FONT, L"DIP", unit_x, dpx(302),
+  add_label(g_opt, app().instance, IDC_UNIT_FONT, L"DIP", unit_x, dpx(342),
             dpx(48), row_h);
 
   add_label(g_opt, app().instance, IDC_HINT,
-            L"自服务需学号密码（明文存本地）；字体 0 表示自动跟随系统", label_x,
-            dpx(348), dpx(kOptClientW) - dpx(48), dpx(22));
+            L"自服务/混合需学号密码；混合在门户未登录时显示未登录；字体 0=自动",
+            label_x, dpx(388), dpx(kOptClientW) - dpx(48), dpx(22));
 
   const int btn_w = dpx(88);
   const int btn_h = dpx(32);

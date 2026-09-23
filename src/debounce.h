@@ -10,7 +10,10 @@ class FlowMonitor {
  public:
   DisplaySnapshot on_http_failure(const wchar_t* err);
   DisplaySnapshot on_not_logged_in();
-  DisplaySnapshot on_sample(double t_sec, uint64_t flow_kb, const PortalInfo& info);
+  DisplaySnapshot on_sample(double t_sec, uint64_t flow_kb,
+                            const PortalInfo& info);
+  DisplaySnapshot on_sample(double t_sec, uint64_t usage_kb, uint64_t rate_kb,
+                            const PortalInfo& info);
   DisplaySnapshot current() const { return snap_; }
 
  private:

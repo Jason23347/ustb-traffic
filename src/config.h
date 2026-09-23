@@ -10,10 +10,17 @@ enum class TrafficSource {
   Portal82 = 0,
   Portal66 = 1,
   Zifuwu = 2,
+  Hybrid = 3,
+};
+
+enum class SpeedSource {
+  Portal82 = 0,
+  Portal66 = 1,
 };
 
 struct Config {
   TrafficSource traffic_source = TrafficSource::Portal82;
+  SpeedSource speed_source = SpeedSource::Portal82;
   std::wstring host = L"202.204.48.82";
   unsigned port = 80;
   std::wstring path = L"/";
@@ -34,6 +41,12 @@ const wchar_t* traffic_source_key(TrafficSource src);
 const wchar_t* traffic_source_label(TrafficSource src);
 TrafficSource traffic_source_from_key(const wchar_t* key);
 TrafficSource traffic_source_from_legacy_host(const std::wstring& host);
+
+const wchar_t* speed_source_key(SpeedSource src);
+const wchar_t* speed_source_label(SpeedSource src);
+SpeedSource speed_source_from_key(const wchar_t* key);
+
+bool traffic_source_needs_zifuwu_cred(TrafficSource src);
 
 std::wstring config_dir();
 std::wstring config_path();

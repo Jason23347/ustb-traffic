@@ -164,14 +164,15 @@ bool http_get(const Config& cfg, std::string& body, std::wstring& err) {
 }
 
 void maybe_reset_zifuwu(const Config& cfg) {
+  const bool uses_zifuwu = traffic_source_needs_zifuwu_cred(cfg.traffic_source);
   if (cfg.traffic_source != g_last_source ||
-      (cfg.traffic_source == TrafficSource::Zifuwu &&
-       cfg.username != g_last_user)) {
+      (uses_zifuwu && cfg.username != g_last_user)) {
     zifuwu_reset_session();
   }
   g_last_source = cfg.traffic_source;
-  g_last_user = cfg.username;
-  if (cfg.traffic_source != TrafficSource::Zifuwu) {
+  if (uses_zifuwu) {
+    g_last_user = cfg.username;
+  } else {
     g_last_user.clear();
   }
 }
@@ -190,6 +191,98 @@ void apply_portal_info(PortalInfo info, DisplaySnapshot& snap) {
   app().snap = snap;
 }
 
+void apply_hybrid_sample(const PortalInfo& identity, uint64_t rate_kb,
+                         const PortalInfo& zifuwu, DisplaySnapshot& snap) {
+  PortalInfo merged;
+  merged.has_nid = identity.has_nid;
+  merged.nid = identity.nid;
+  merged.uid = identity.uid;
+  merged.has_flow = zifuwu.has_flow;
+  merged.flow_kb = zifuwu.flow_kb;
+  merged.fee = zifuwu.fee;
+
+  std::lock_guard<std::mutex> lock(app().mu);
+  snap = app().monitor.on_sample(now_sec(), zifuwu.flow_kb, rate_kb, merged);
+  app().snap = snap;
+}
+
+bool http_get_portal_host(const wchar_t* host, std::string& body,
+                          std::wstring& err) {
+  Config portal_cfg;
+  portal_cfg.host = host;
+  portal_cfg.port = 80;
+  portal_cfg.path = L"/";
+  portal_cfg.use_https = false;
+  return http_get(portal_cfg, body, err);
+}
+
+void poll_hybrid(const Config& cfg, DisplaySnapshot& snap) {
+  std::string identity_body;
+  std::wstring identity_err;
+  if (!http_get_portal_host(L"202.204.48.82", identity_body, identity_err)) {
+    std::lock_guard<std::mutex> lock(app().mu);
+    snap = app().monitor.on_http_failure(identity_err.c_str());
+    app().snap = snap;
+    return;
+  }
+
+  const PortalInfo identity = parse_portal_html(identity_body);
+  if (!identity.logged_in()) {
+    std::lock_guard<std::mutex> lock(app().mu);
+    snap = app().monitor.on_not_logged_in();
+    app().snap = snap;
+    return;
+  }
+
+  uint64_t rate_kb = 0;
+  if (cfg.speed_source == SpeedSource::Portal66) {
+    std::string speed_body;
+    std::wstring speed_err;
+    if (!http_get_portal_host(L"202.204.48.66", speed_body, speed_err)) {
+      std::lock_guard<std::mutex> lock(app().mu);
+      snap = app().monitor.on_http_failure(speed_err.c_str());
+      app().snap = snap;
+      return;
+    }
+    const PortalInfo speed_portal = parse_portal_html(speed_body);
+    if (!speed_portal.has_flow) {
+      std::lock_guard<std::mutex> lock(app().mu);
+      snap = app().monitor.on_http_failure(L"无法解析 48.66 flow（速率源）");
+      app().snap = snap;
+      return;
+    }
+    rate_kb = speed_portal.flow_kb;
+  } else {
+    if (!identity.has_flow) {
+      std::lock_guard<std::mutex> lock(app().mu);
+      snap = app().monitor.on_http_failure(L"无法解析 48.82 flow（速率源）");
+      app().snap = snap;
+      return;
+    }
+    rate_kb = identity.flow_kb;
+  }
+
+  const ZifuwuFetchResult fetched = zifuwu_fetch_dashboard(cfg);
+  if (!fetched.ok) {
+    std::lock_guard<std::mutex> lock(app().mu);
+    snap = app().monitor.on_http_failure(
+        fetched.err.empty() ? L"自服务请求失败" : fetched.err.c_str());
+    app().snap = snap;
+    return;
+  }
+
+  const PortalInfo zifuwu = parse_zifuwu_dashboard(fetched.body);
+  if (!zifuwu.has_flow) {
+    zifuwu_reset_session();
+    std::lock_guard<std::mutex> lock(app().mu);
+    snap = app().monitor.on_http_failure(L"无法解析已用流量");
+    app().snap = snap;
+    return;
+  }
+
+  apply_hybrid_sample(identity, rate_kb, zifuwu, snap);
+}
+
 void poller_loop() {
   while (app().running.load()) {
     const double loop_start = now_sec();
@@ -202,7 +295,9 @@ void poller_loop() {
     maybe_reset_zifuwu(cfg);
 
     DisplaySnapshot snap;
-    if (cfg.traffic_source == TrafficSource::Zifuwu) {
+    if (cfg.traffic_source == TrafficSource::Hybrid) {
+      poll_hybrid(cfg, snap);
+    } else if (cfg.traffic_source == TrafficSource::Zifuwu) {
       const ZifuwuFetchResult fetched = zifuwu_fetch_dashboard(cfg);
       if (!fetched.ok) {
         std::lock_guard<std::mutex> lock(app().mu);

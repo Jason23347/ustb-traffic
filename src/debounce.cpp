@@ -65,23 +65,30 @@ DisplaySnapshot FlowMonitor::on_not_logged_in() {
 
 DisplaySnapshot FlowMonitor::on_sample(double t_sec, uint64_t flow_kb,
                                        const PortalInfo& info) {
+  return on_sample(t_sec, flow_kb, flow_kb, info);
+}
+
+DisplaySnapshot FlowMonitor::on_sample(double t_sec, uint64_t usage_kb,
+                                       uint64_t rate_kb,
+                                       const PortalInfo& info) {
   snap_.fail_count = 0;
   snap_.last_error.clear();
   remember_identity(info);
   snap_.last_success_text = now_text();
 
-  if (flow_kb == 0 && snap_.have_usage && snap_.used_kb > 0) {
+  // Portal zero-flow bug: keep last usage, skip rate update for this tick.
+  if (usage_kb == 0 && snap_.have_usage && snap_.used_kb > 0) {
     snap_.state = MonitorState::LoggedIn;
     return snap_;
   }
 
-  snap_.used_kb = flow_kb;
+  snap_.used_kb = usage_kb;
   snap_.have_usage = true;
   snap_.state = MonitorState::LoggedIn;
 
   if (!have_prev_ || baseline_only_) {
     prev_t_ = t_sec;
-    prev_c_ = flow_kb;
+    prev_c_ = rate_kb;
     have_prev_ = true;
     baseline_only_ = false;
     return snap_;
@@ -93,20 +100,20 @@ DisplaySnapshot FlowMonitor::on_sample(double t_sec, uint64_t flow_kb,
   }
   if (dt > kMaxSampleDt) {
     prev_t_ = t_sec;
-    prev_c_ = flow_kb;
+    prev_c_ = rate_kb;
     snap_.rate_valid = false;
     return snap_;
   }
-  if (flow_kb < prev_c_) {
+  if (rate_kb < prev_c_) {
     prev_t_ = t_sec;
-    prev_c_ = flow_kb;
+    prev_c_ = rate_kb;
     snap_.rate_valid = false;
     return snap_;
   }
 
-  const double inst = static_cast<double>(flow_kb - prev_c_) / dt;
+  const double inst = static_cast<double>(rate_kb - prev_c_) / dt;
   prev_t_ = t_sec;
-  prev_c_ = flow_kb;
+  prev_c_ = rate_kb;
 
   if (inst > kMaxRateKbps) {
     snap_.display_rate_kbps = 0;

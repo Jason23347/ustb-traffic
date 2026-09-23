@@ -73,12 +73,121 @@ int main() {
         "<div class=\"col-xs-4\"><small>"
         "<span style=\"color: #5cb85c;\">剩余:</span> "
         "<strong style=\"color: #5cb85c; font-size: 16px;\">0M</strong>"
-        "</small></div></div>";
+        "</small></div></div>"
+        "<div class=\"col-md-3 col-xs-6 col-xxxs-12\">"
+        "<dl>"
+        "<dt>\n                                                    19.94\n"
+        "                                                    <small class=\"unit\">\n"
+        "                                                        元</small>\n"
+        "                                                </dt>"
+        "<dd>账户余额</dd>"
+        "</dl>"
+        "</div>";
     const PortalInfo info = parse_zifuwu_dashboard(html);
     expect(info.has_flow, "zifuwu has_flow");
     expect(info.logged_in(), "zifuwu logged in");
     expect(info.flow_kb == 141340ull * 1024ull, "zifuwu used MB to KB");
     expect(info.nid == "朱帅成", "zifuwu name from h4");
+    expect(info.fee == 199400u, "zifuwu fee yuan*10000");
+  }
+
+  {
+    // Live dashboard cards (dl/dt/dd) + progress panel; must prefer 已用流量 card
+    // over #f0ad4e progress-bar / 总量 strong.
+    const std::string html =
+        "<div class=\"col-xs-12 user-info1\">"
+        "<div class=\"col-md-3 col-xs-6 col-xxxs-12\"><dl>"
+        "<dt>\n                                                    155047\n"
+        "                                                    <small class=\"unit\">M</small>\n"
+        "                                                </dt>"
+        "<dd>已用流量</dd></dl></div>"
+        "<div class=\"col-md-3 col-xs-6 col-xxxs-12\"><dl>"
+        "<dt>33233<small class=\"unit\">M</small></dt>"
+        "<dd>可用流量=免费流量+资金可使用流量</dd></dl></div>"
+        "<div class=\"col-md-3 col-xs-6 col-xxxs-12\"><dl>"
+        "<dt>未设置</dt><dd>消费保护</dd></dl></div>"
+        "<div class=\"col-md-3 col-xs-6 col-xxxs-12\"><dl>"
+        "<dt>\n                                                    19.94\n"
+        "                                                    <small class=\"unit\">\n"
+        "                                                        元</small>\n"
+        "                                                </dt>"
+        "<dd>账户余额</dd></dl></div>"
+        "<div class=\"progress-bar\" style=\"background-color: #f0ad4e;\"></div>"
+        "<div class=\"progress-bar\" style=\"background-color: #5cb85c;\"></div>"
+        "<span style=\"color: #337ab7;\">总量:</span> "
+        "<strong style=\"color: #337ab7; font-size: 16px;\">122880M</strong>"
+        "<span style=\"color: #f0ad4e;\">已用:</span> "
+        "<strong style=\"color: #f0ad4e; font-size: 16px;\">155047M</strong>"
+        "<span style=\"color: #5cb85c;\">剩余:</span> "
+        "<strong style=\"color: #5cb85c; font-size: 16px;\">0M</strong>"
+        "</div>";
+    const PortalInfo info = parse_zifuwu_dashboard(html);
+    expect(info.has_flow, "card has_flow");
+    expect(info.flow_kb == 155047ull * 1024ull, "card used 155047M");
+    expect(info.fee == 199400u, "card fee 19.94");
+  }
+
+  {
+    // Entity-encoded labels (as sometimes emitted by Java backends).
+    const std::string html =
+        "<dl><dt>19.94<small class=\"unit\">&#20803;</small></dt>"
+        "<dd>&#x8D26;&#x6237;&#x4F59;&#x989D;</dd></dl>"
+        "<dl><dt>155047<small class=\"unit\">M</small></dt>"
+        "<dd>&#x5DF2;&#x7528;&#x6D41;&#x91CF;</dd></dl>";
+    const PortalInfo info = parse_zifuwu_dashboard(html);
+    expect(info.fee == 199400u, "entity fee 19.94");
+    expect(info.has_flow && info.flow_kb == 155047ull * 1024ull,
+           "entity used flow");
+  }
+
+  {
+    // English UI (Accept-Language / server locale) uses Balance / Used Flow.
+    const std::string html =
+        "<div class=\"col-xs-12 user-info1\">"
+        "<div class=\"col-md-3\"><dl>"
+        "<dt>155179<small class=\"unit\">M</small></dt>"
+        "<dd>Used Flow</dd></dl></div>"
+        "<div class=\"col-md-3\"><dl>"
+        "<dt>19.86<small class=\"unit\">Yuan</small></dt>"
+        "<dd>Balance</dd></dl></div></div>";
+    const PortalInfo info = parse_zifuwu_dashboard(html);
+    expect(info.has_flow && info.flow_kb == 155179ull * 1024ull,
+           "english Used Flow");
+    expect(info.fee == 198600u, "english Balance 19.86");
+  }
+
+  {
+    // JSON leftMoney is package credit — must NOT override 账户余额 card.
+    const std::string html =
+        "{\"leftFlow\":0,\"leftMoney\":21.44,\"leftTime\":0}"
+        "<div class=\"col-md-3\"><dl>"
+        "<dt>19.94<small class=\"unit\">\n元</small></dt>"
+        "<dd>账户余额</dd></dl></div>";
+    const PortalInfo info = parse_zifuwu_dashboard(html);
+    expect(info.fee == 199400u, "prefer card 19.94 over leftMoney 21.44");
+  }
+
+  {
+    const std::string html =
+        "{\"leftFlow\":0,\"leftMoney\":21.44,\"leftTime\":0}";
+    const PortalInfo info = parse_zifuwu_dashboard(html);
+    expect(info.fee == 0u, "leftMoney alone is not 账户余额");
+  }
+
+  {
+    FlowMonitor m;
+    PortalInfo info;
+    info.has_nid = true;
+    info.nid = "n";
+    info.has_flow = true;
+    info.uid = "u";
+    auto s1 = m.on_sample(1.0, 5000, 1000, info);
+    expect(s1.have_usage && s1.used_kb == 5000, "split usage first");
+    expect(!s1.rate_valid, "split rate baseline");
+    auto s2 = m.on_sample(2.0, 5000, 1124, info);
+    expect(s2.used_kb == 5000, "split usage unchanged");
+    expect(s2.rate_valid, "split rate from rate_kb");
+    expect(std::fabs(s2.display_rate_kbps - 124.0) < 1.0, "split rate value");
   }
 
   {

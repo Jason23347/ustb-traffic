@@ -331,6 +331,7 @@ bool http_exchange(const wchar_t* method, const wchar_t* path,
     }
     // Site JS uses ctx under /Self/; referer helps session binding.
     extra_headers += L"Referer: https://zifuwu.ustb.edu.cn/Self/login/\r\n";
+    extra_headers += L"Accept-Language: zh-CN,zh;q=0.9,en;q=0.8\r\n";
     if (cur_post) {
       extra_headers += L"Content-Type: application/x-www-form-urlencoded\r\n";
     }
@@ -647,8 +648,18 @@ ZifuwuFetchResult zifuwu_fetch_dashboard(const Config& cfg) {
     }
   }
 
-  // Login page bounced back (no usage block).
-  if (body.find("已用") == std::string::npos) {
+  // Login page bounced back (no dashboard cards / usage block).
+  const bool looks_like_dashboard =
+      body.find("已用流量") != std::string::npos ||
+      body.find("Used Flow") != std::string::npos ||
+      body.find("已用:") != std::string::npos ||
+      body.find("已用：") != std::string::npos ||
+      body.find("账户余额") != std::string::npos ||
+      body.find("Balance") != std::string::npos ||
+      body.find("\xD2\xD1\xD3\xC3") != std::string::npos ||  // GBK 已用
+      body.find("\xD5\xCB\xBB\xA7\xD3\xE0\xB6\xEE") !=
+          std::string::npos;  // GBK 账户余额
+  if (!looks_like_dashboard) {
     zifuwu_reset_session();
     if (body.find("name=\"checkcode\"") != std::string::npos ||
         body.find("/Self/login") != std::string::npos) {
