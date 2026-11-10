@@ -12,5 +12,6 @@ std::optional<std::string> extract_quoted_field(const std::string& html,
                                                 const char* key);
 PortalInfo parse_portal_html(const std::string& html);
 PortalInfo parse_zifuwu_dashboard(const std::string& html);
+PortalInfo parse_eportal_user_flow(const std::string& body);
 
 }  // namespace ustb

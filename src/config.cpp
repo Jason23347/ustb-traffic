@@ -72,6 +72,19 @@ void apply_traffic_source(Config& cfg) {
       cfg.path = L"/";
       cfg.use_https = false;
       break;
+    case TrafficSource::Eportal:
+      cfg.host = L"202.204.48.82";
+      cfg.port = 801;
+      cfg.path = L"/eportal/portal/visitor/loadUserFlow?callback=a";
+      cfg.use_https = false;
+      break;
+    case TrafficSource::HybridEportal:
+      // Identity from portal 48.82; usage via eportal :801.
+      cfg.host = L"202.204.48.82";
+      cfg.port = 80;
+      cfg.path = L"/";
+      cfg.use_https = false;
+      break;
     case TrafficSource::Portal82:
     default:
       cfg.traffic_source = TrafficSource::Portal82;
@@ -91,6 +104,10 @@ const wchar_t* traffic_source_key(TrafficSource src) {
       return L"zifuwu";
     case TrafficSource::Hybrid:
       return L"hybrid";
+    case TrafficSource::Eportal:
+      return L"eportal";
+    case TrafficSource::HybridEportal:
+      return L"hybrid_eportal";
     case TrafficSource::Portal82:
     default:
       return L"portal82";
@@ -105,6 +122,10 @@ const wchar_t* traffic_source_label(TrafficSource src) {
       return L"https://zifuwu.ustb.edu.cn";
     case TrafficSource::Hybrid:
       return L"混合（登录页身份+自服务用量）";
+    case TrafficSource::Eportal:
+      return L"eportal (202.204.48.82:801)";
+    case TrafficSource::HybridEportal:
+      return L"混合（登录页身份+eportal用量）";
     case TrafficSource::Portal82:
     default:
       return L"202.204.48.82";
@@ -123,6 +144,12 @@ TrafficSource traffic_source_from_key(const wchar_t* key) {
   }
   if (_wcsicmp(key, L"hybrid") == 0) {
     return TrafficSource::Hybrid;
+  }
+  if (_wcsicmp(key, L"eportal") == 0) {
+    return TrafficSource::Eportal;
+  }
+  if (_wcsicmp(key, L"hybrid_eportal") == 0) {
+    return TrafficSource::HybridEportal;
   }
   return TrafficSource::Portal82;
 }
@@ -166,6 +193,10 @@ SpeedSource speed_source_from_key(const wchar_t* key) {
 
 bool traffic_source_needs_zifuwu_cred(TrafficSource src) {
   return src == TrafficSource::Zifuwu || src == TrafficSource::Hybrid;
+}
+
+bool traffic_source_needs_speed_source(TrafficSource src) {
+  return src == TrafficSource::Hybrid || src == TrafficSource::HybridEportal;
 }
 
 std::wstring config_dir() {

@@ -11,6 +11,8 @@ enum class TrafficSource {
   Portal66 = 1,
   Zifuwu = 2,
   Hybrid = 3,
+  Eportal = 4,
+  HybridEportal = 5,
 };
 
 enum class SpeedSource {
@@ -47,6 +49,7 @@ const wchar_t* speed_source_label(SpeedSource src);
 SpeedSource speed_source_from_key(const wchar_t* key);
 
 bool traffic_source_needs_zifuwu_cred(TrafficSource src);
+bool traffic_source_needs_speed_source(TrafficSource src);
 
 std::wstring config_dir();
 std::wstring config_path();

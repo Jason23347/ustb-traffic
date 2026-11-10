@@ -76,6 +76,12 @@ TrafficSource selected_source(HWND hwnd) {
   if (sel == 3) {
     return TrafficSource::Hybrid;
   }
+  if (sel == 4) {
+    return TrafficSource::Eportal;
+  }
+  if (sel == 5) {
+    return TrafficSource::HybridEportal;
+  }
   return TrafficSource::Portal82;
 }
 
@@ -92,7 +98,7 @@ SpeedSource selected_speed_source(HWND hwnd) {
 void sync_source_dependent(HWND hwnd) {
   const TrafficSource src = selected_source(hwnd);
   const bool need_cred = traffic_source_needs_zifuwu_cred(src);
-  const bool need_speed = src == TrafficSource::Hybrid;
+  const bool need_speed = traffic_source_needs_speed_source(src);
   EnableWindow(GetDlgItem(hwnd, IDC_USER), need_cred ? TRUE : FALSE);
   EnableWindow(GetDlgItem(hwnd, IDC_PASS), need_cred ? TRUE : FALSE);
   EnableWindow(GetDlgItem(hwnd, IDC_SPEED), need_speed ? TRUE : FALSE);
@@ -377,6 +383,11 @@ void show_options_dialog(HWND parent) {
                reinterpret_cast<LPARAM>(traffic_source_label(TrafficSource::Zifuwu)));
   SendMessageW(source, CB_ADDSTRING, 0,
                reinterpret_cast<LPARAM>(traffic_source_label(TrafficSource::Hybrid)));
+  SendMessageW(source, CB_ADDSTRING, 0,
+               reinterpret_cast<LPARAM>(traffic_source_label(TrafficSource::Eportal)));
+  SendMessageW(source, CB_ADDSTRING, 0,
+               reinterpret_cast<LPARAM>(
+                   traffic_source_label(TrafficSource::HybridEportal)));
   int sel = 0;
   if (cfg.traffic_source == TrafficSource::Portal66) {
     sel = 1;
@@ -384,6 +395,10 @@ void show_options_dialog(HWND parent) {
     sel = 2;
   } else if (cfg.traffic_source == TrafficSource::Hybrid) {
     sel = 3;
+  } else if (cfg.traffic_source == TrafficSource::Eportal) {
+    sel = 4;
+  } else if (cfg.traffic_source == TrafficSource::HybridEportal) {
+    sel = 5;
   }
   SendMessageW(source, CB_SETCURSEL, sel, 0);
 
@@ -450,7 +465,7 @@ void show_options_dialog(HWND parent) {
             dpx(48), row_h);
 
   add_label(g_opt, app().instance, IDC_HINT,
-            L"自服务/混合需学号密码；混合在门户未登录时显示未登录；字体 0=自动",
+            L"自服务/自服务混合需学号密码；两种混合在门户未登录时显示未登录；字体 0=自动",
             label_x, dpx(388), dpx(kOptClientW) - dpx(48), dpx(22));
 
   const int btn_w = dpx(88);

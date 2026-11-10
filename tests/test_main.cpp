@@ -168,6 +168,35 @@ int main() {
   }
 
   {
+    const std::string body =
+        "a({\"result\":1,\"data\":{\"v4\":49795.23,\"v6\":209260.88}});";
+    const PortalInfo info = parse_eportal_user_flow(body);
+    expect(info.has_flow, "eportal has_flow");
+    expect(info.logged_in(), "eportal logged in placeholder");
+    expect(info.nid == "eportal", "eportal nid placeholder");
+    expect(info.flow_kb == static_cast<uint64_t>(std::llround(49795.23 * 1024.0)),
+           "eportal v4 only MB to KB");
+    expect(info.fee == 0u, "eportal no fee");
+  }
+
+  {
+    const PortalInfo bad =
+        parse_eportal_user_flow("a({\"result\":0,\"data\":{\"v4\":1}});");
+    expect(!bad.has_flow, "eportal result!=1");
+  }
+
+  {
+    const PortalInfo missing =
+        parse_eportal_user_flow("a({\"result\":1,\"data\":{\"v6\":9}});");
+    expect(!missing.has_flow, "eportal missing v4");
+  }
+
+  {
+    const PortalInfo junk = parse_eportal_user_flow("not-jsonp");
+    expect(!junk.has_flow, "eportal non-jsonp");
+  }
+
+  {
     const std::string html =
         "{\"leftFlow\":0,\"leftMoney\":21.44,\"leftTime\":0}";
     const PortalInfo info = parse_zifuwu_dashboard(html);

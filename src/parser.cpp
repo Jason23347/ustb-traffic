@@ -1,6 +1,7 @@
 #include "parser.h"
 
 #include <cctype>
+#include <cmath>
 #include <cstring>
 #include <string>
 
@@ -725,6 +726,105 @@ PortalInfo parse_zifuwu_dashboard_body(const std::string& html) {
 PortalInfo parse_zifuwu_dashboard(const std::string& html) {
   // Always decode &#…; so label matches work when the server entity-encodes CJK.
   return parse_zifuwu_dashboard_body(decode_html_text_entities(html));
+}
+
+namespace {
+
+std::optional<double> extract_json_number(const std::string& json,
+                                          const char* key) {
+  if (key == nullptr || key[0] == '\0') {
+    return std::nullopt;
+  }
+  const std::string quoted = std::string("\"") + key + "\"";
+  size_t pos = json.find(quoted);
+  if (pos == std::string::npos) {
+    return std::nullopt;
+  }
+  pos += quoted.size();
+  pos = skip_space(json, pos);
+  if (pos >= json.size() || json[pos] != ':') {
+    return std::nullopt;
+  }
+  pos = skip_space(json, pos + 1);
+  if (pos >= json.size()) {
+    return std::nullopt;
+  }
+  const size_t start = pos;
+  if (json[pos] == '-' || json[pos] == '+') {
+    ++pos;
+  }
+  bool saw_digit = false;
+  while (pos < json.size() &&
+         std::isdigit(static_cast<unsigned char>(json[pos]))) {
+    saw_digit = true;
+    ++pos;
+  }
+  if (pos < json.size() && json[pos] == '.') {
+    ++pos;
+    while (pos < json.size() &&
+           std::isdigit(static_cast<unsigned char>(json[pos]))) {
+      saw_digit = true;
+      ++pos;
+    }
+  }
+  if (!saw_digit) {
+    return std::nullopt;
+  }
+  if (pos < json.size() && (json[pos] == 'e' || json[pos] == 'E')) {
+    ++pos;
+    if (pos < json.size() && (json[pos] == '+' || json[pos] == '-')) {
+      ++pos;
+    }
+    const size_t exp_start = pos;
+    while (pos < json.size() &&
+           std::isdigit(static_cast<unsigned char>(json[pos]))) {
+      ++pos;
+    }
+    if (pos == exp_start) {
+      return std::nullopt;
+    }
+  }
+  try {
+    return std::stod(json.substr(start, pos - start));
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+}  // namespace
+
+PortalInfo parse_eportal_user_flow(const std::string& body) {
+  PortalInfo info;
+  const size_t open = body.find('(');
+  const size_t close = body.rfind(')');
+  if (open == std::string::npos || close == std::string::npos || close <= open) {
+    return info;
+  }
+  const std::string json = body.substr(open + 1, close - open - 1);
+
+  const auto result = extract_json_number(json, "result");
+  if (!result || *result != 1.0) {
+    return info;
+  }
+
+  // Billable usage is IPv4 only; IPv6 is free and ignored.
+  const auto v4 = extract_json_number(json, "v4");
+  if (!v4) {
+    return info;
+  }
+  if (*v4 < 0.0) {
+    return info;
+  }
+
+  const double kb = *v4 * 1024.0;
+  if (kb > static_cast<double>(UINT64_MAX)) {
+    return info;
+  }
+  info.has_flow = true;
+  info.flow_kb = static_cast<uint64_t>(std::llround(kb));
+  info.has_nid = true;
+  info.nid = "eportal";
+  return info;
 }
 
 }  // namespace ustb
